@@ -4,148 +4,132 @@ const cors = require("cors");
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 const PORT = process.env.PORT || 10000;
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID || "-1004479342350";
-const BOT_USERNAME =
-  process.env.BOT_USERNAME || "BettelX7ArenaSupportBot";
 
-function clean(value, fallback = "N/A") {
-  if (
-    value === undefined ||
-    value === null ||
-    String(value).trim() === ""
-  ) {
-    return fallback;
-  }
+const BOT_USERNAME = "BettelX7ArenaSupportBot";
 
-  return String(value).trim();
+
+// ============================================================
+// BASIC HELPERS
+// ============================================================
+
+function telegramApi(method) {
+  return `https://api.telegram.org/bot${BOT_TOKEN}/${method}`;
 }
 
-function escapeHtml(value) {
-  return clean(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+async function telegram(method, body) {
+  const response = await fetch(telegramApi(method), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  return await response.json();
 }
 
-/* ================================
-   PROOF TYPE
-================================ */
 
-function getProofType(category = "") {
-  const c = String(category).toLowerCase();
+// ============================================================
+// DECIDE REQUIRED PROOF
+// ============================================================
 
-  // Hack / Cheat / Player report = VIDEO
-  if (
-    c.includes("hack") ||
-    c.includes("cheat") ||
-    c.includes("hacking") ||
-    c.includes("cheating") ||
-    c.includes("player report") ||
-    c.includes("report player")
-  ) {
-    return "video";
+function getProofType(category, problemSummary, description) {
+
+  const text = `
+    ${category || ""}
+    ${problemSummary || ""}
+    ${description || ""}
+  `.toLowerCase();
+
+
+  // Video proof cases
+  const videoKeywords = [
+    "hack",
+    "hacked",
+    "cheat",
+    "cheating",
+    "hacker",
+    "account hack",
+    "account hacked",
+    "fake",
+    "fraud",
+    "scam",
+    "abuse",
+    "bug abuse"
+  ];
+
+  for (const keyword of videoKeywords) {
+    if (text.includes(keyword)) {
+      return "video";
+    }
   }
 
-  // बाकी सामान्य issues = SCREENSHOT
+
+  // Screenshot proof cases
   return "screenshot";
 }
 
-function proofInstruction(type) {
-  if (type === "video") {
-    return (
-      "🎥 Please send a clear VIDEO / screen recording " +
-      "showing the issue."
-    );
-  }
 
-  return (
-    "📸 Please send a clear SCREENSHOT showing the issue."
-  );
-}
+// ============================================================
+// HOME
+// ============================================================
 
-/* ================================
-   TELEGRAM API
-================================ */
-
-async function telegram(method, body) {
-  if (!BOT_TOKEN) {
-    throw new Error("BOT_TOKEN is not configured");
-  }
-
-  const response = await fetch(
-    `https://api.telegram.org/bot${BOT_TOKEN}/${method}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    }
-  );
-
-  const data = await response.json();
-
-  if (!response.ok || !data.ok) {
-    throw new Error(
-      data.description || "Telegram API error"
-    );
-  }
-
-  return data;
-}
-
-/* ================================
-   TELEGRAM DEEP LINK
-================================ */
-
-function telegramUrl(ticketId, proofType) {
-  const start =
-    `ticket_${ticketId}_${proofType}`;
-
-  return (
-    `https://t.me/${BOT_USERNAME}` +
-    `?start=${encodeURIComponent(start)}`
-  );
-}
-
-/* ================================
-   HOME
-================================ */
-
-app.get("/", (_req, res) => {
+app.get("/", (req, res) => {
   res.json({
     status: "online",
-    service:
-      "BATTLE X7 ARENA Telegram Support Backend"
+    service: "BATTLE X7 ARENA Telegram Support Backend"
   });
 });
 
-/* ================================
-   HEALTH
-================================ */
 
-app.get("/health", (_req, res) => {
+// ============================================================
+// HEALTH
+// ============================================================
+
+app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    telegramConfigured: Boolean(BOT_TOKEN)
+    telegramConfigured: !!BOT_TOKEN,
+    chatConfigured: !!CHAT_ID
   });
 });
 
-/* ================================
-   SEND NEW TICKET
-================================ */
+
+// ============================================================
+// SEND NEW TICKET TO TELEGRAM GROUP
+// ============================================================
 
 app.post("/send-ticket", async (req, res) => {
+
   try {
-    const ticketId = clean(
-      req.body.ticketId,
-      ""
-    );
+
+    if (!BOT_TOKEN) {
+      return res.status(500).json({
+        ok: false,
+        error: "BOT_TOKEN is not configured on Render"
+      });
+    }
+
+
+    const {
+      ticketId,
+      category,
+      tournamentId,
+      problemSummary,
+      description,
+      uid,
+      freeFireName,
+      username,
+      mobile,
+      email
+    } = req.body;
+
 
     if (!ticketId) {
       return res.status(400).json({
@@ -154,466 +138,557 @@ app.post("/send-ticket", async (req, res) => {
       });
     }
 
-    const ticket = {
-      ticketId,
 
-      category: clean(
-        req.body.category
-      ),
-
-      tournamentId: clean(
-        req.body.tournamentId
-      ),
-
-      problemSummary: clean(
-        req.body.problemSummary
-      ),
-
-      description: clean(
-        req.body.description
-      ),
-
-      uid: clean(
-        req.body.uid
-      ),
-
-      freeFireName: clean(
-        req.body.freeFireName
-      ),
-
-      username: clean(
-        req.body.username
-      ),
-
-      mobile: clean(
-        req.body.mobile
-      ),
-
-      email: clean(
-        req.body.email
-      )
-    };
-
-    /* Decide screenshot/video */
-    const proofType =
-      getProofType(ticket.category);
-
-    /* Telegram group message */
-
-    const message =
-      `🎫 <b>NEW SUPPORT TICKET</b>\n\n` +
-
-      `━━━━━━━━━━━━━━━━━━\n` +
-
-      `🆔 <b>Ticket ID:</b> #` +
-      `${escapeHtml(ticket.ticketId)}\n\n` +
-
-      `👤 <b>USER DETAILS</b>\n` +
-
-      `<b>UID:</b> ` +
-      `${escapeHtml(ticket.uid)}\n` +
-
-      `<b>Free Fire Name:</b> ` +
-      `${escapeHtml(ticket.freeFireName)}\n` +
-
-      `<b>Username:</b> ` +
-      `${escapeHtml(ticket.username)}\n` +
-
-      `<b>Mobile:</b> ` +
-      `${escapeHtml(ticket.mobile)}\n` +
-
-      `<b>Email:</b> ` +
-      `${escapeHtml(ticket.email)}\n\n` +
-
-      `━━━━━━━━━━━━━━━━━━\n` +
-
-      `📋 <b>TICKET DETAILS</b>\n` +
-
-      `<b>Category:</b> ` +
-      `${escapeHtml(ticket.category)}\n` +
-
-      `<b>Tournament ID:</b> ` +
-      `${escapeHtml(ticket.tournamentId)}\n\n` +
-
-      `<b>Problem:</b>\n` +
-      `${escapeHtml(ticket.problemSummary)}\n\n` +
-
-      `<b>Description:</b>\n` +
-      `${escapeHtml(ticket.description)}\n\n` +
-
-      `━━━━━━━━━━━━━━━━━━\n` +
-
-      `🔴 <b>PROOF REQUIRED:</b> ` +
-      `${proofType === "video"
-        ? "VIDEO"
-        : "SCREENSHOT"}\n\n` +
-
-      `⚡ <b>BATTLE X7 ARENA SUPPORT</b>`;
-
-    /* Send ticket to support group */
-
-    const sent = await telegram(
-      "sendMessage",
-      {
-        chat_id: CHAT_ID,
-        text: message,
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
+    // Decide whether screenshot or video is required
+    const proofType = getProofType(
+      category,
+      problemSummary,
+      description
     );
 
-    /*
-      IMPORTANT:
-      Telegram is NOT opened here.
-      Only the ticket is sent automatically.
-    */
+
+    const proofText =
+      proofType === "video"
+        ? "🎥 Required Proof: VIDEO"
+        : "📸 Required Proof: SCREENSHOT";
+
+
+    const message = `
+🎫 NEW SUPPORT TICKET
+
+━━━━━━━━━━━━━━━━━━
+🆔 Ticket ID: ${ticketId}
+
+👤 USER DETAILS
+
+UID: ${uid || "N/A"}
+Free Fire Name: ${freeFireName || "N/A"}
+Username: ${username || "N/A"}
+Mobile: ${mobile || "N/A"}
+Email: ${email || "N/A"}
+
+━━━━━━━━━━━━━━━━━━
+📋 TICKET DETAILS
+
+Category: ${category || "N/A"}
+Tournament ID: ${tournamentId || "N/A"}
+
+Problem:
+${problemSummary || "N/A"}
+
+Description:
+${description || "N/A"}
+
+━━━━━━━━━━━━━━━━━━
+${proofText}
+
+The user will be asked for this proof in Telegram.
+
+⚡ BATTLE X7 ARENA SUPPORT
+`;
+
+
+    const telegramResult = await telegram("sendMessage", {
+      chat_id: CHAT_ID,
+      text: message
+    });
+
+
+    if (!telegramResult.ok) {
+
+      console.error(
+        "Telegram sendMessage failed:",
+        telegramResult
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Telegram failed to receive ticket",
+        telegram: telegramResult
+      });
+    }
+
+
+    // ========================================================
+    // TELEGRAM DEEP LINK
+    // ========================================================
+    //
+    // p_ = screenshot
+    // v_ = video
+    //
+    // Example:
+    // https://t.me/BettelX7ArenaSupportBot?start=p_WCX0LFGW
+    //
+
+    const prefix =
+      proofType === "video" ? "v_" : "p_";
+
+
+    const telegramUrl =
+      `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
+
 
     res.json({
       ok: true,
 
-      ticketId,
-
-      proofType,
-
-      proofInstruction:
-        proofInstruction(proofType),
+      ticketId: ticketId,
 
       telegramMessageId:
-        sent.result?.message_id || null,
+        telegramResult.result?.message_id || null,
 
-      telegramUrl:
-        telegramUrl(
-          ticketId,
-          proofType
-        )
+      proofType: proofType,
+
+      telegramUrl: telegramUrl
     });
+
 
   } catch (error) {
 
     console.error(
-      "send-ticket error:",
+      "SEND TICKET ERROR:",
       error
     );
 
     res.status(500).json({
       ok: false,
-      error:
-        error.message ||
-        "Failed to send ticket to Telegram"
+      error: "Failed to send ticket to Telegram"
     });
+
   }
+
 });
 
-/* ================================
-   TELEGRAM WEBHOOK
-================================ */
 
-const activeTickets = new Map();
+// ============================================================
+// TELEGRAM WEBHOOK
+// ============================================================
 
-app.post(
-  "/telegram/webhook",
-  async (req, res) => {
+app.post("/telegram/webhook", async (req, res) => {
 
-    /* Telegram needs quick response */
+  try {
+
+    const update = req.body;
+
+    console.log(
+      "TELEGRAM UPDATE:",
+      JSON.stringify(update)
+    );
+
+
+    // Always immediately tell Telegram that update was received
     res.sendStatus(200);
 
-    try {
 
-      const message =
-        req.body?.message;
-
-      if (!message) {
-        return;
-      }
-
-      const chatId =
-        message.chat?.id;
-
-      if (!chatId) {
-        return;
-      }
-
-      const from =
-        message.from || {};
-
-      const name =
-        clean(
-          from.first_name,
-          "User"
-        );
-
-      const text =
-        clean(
-          message.text,
-          ""
-        );
-
-      /* ============================
-         START TICKET
-      ============================ */
-
-      if (text.startsWith("/start")) {
-
-        const param =
-          text.split(/\s+/)[1] || "";
-
-        if (
-          !param.startsWith(
-            "ticket_"
-          )
-        ) {
-
-          await telegram(
-            "sendMessage",
-            {
-              chat_id: chatId,
-
-              text:
-                `👋 Hello ` +
-                `${escapeHtml(name)}!\n\n` +
-
-                `Please open Telegram ` +
-                `from the <b>Chat with Telegram</b> ` +
-                `button inside your BATTLE X7 ARENA ticket.`,
-
-              parse_mode: "HTML"
-            }
-          );
-
-          return;
-        }
-
-        const parts =
-          param.split("_");
-
-        const ticketId =
-          parts[1] || "";
-
-        const proofType =
-          parts[2] === "video"
-            ? "video"
-            : "screenshot";
-
-        if (!ticketId) {
-          return;
-        }
-
-        /* Connect Telegram user to ticket */
-
-        activeTickets.set(
-          String(chatId),
-          {
-            ticketId,
-            proofType
-          }
-        );
-
-        /* Automatic bot reply */
-
-        await telegram(
-          "sendMessage",
-          {
-            chat_id: chatId,
-
-            text:
-              `✅ <b>Ticket connected</b>\n\n` +
-
-              `🎫 Ticket ID: <b>#` +
-              `${escapeHtml(ticketId)}</b>\n\n` +
-
-              `${proofInstruction(
-                proofType
-              )}\n\n` +
-
-              `Send the proof here in this chat.`,
-
-            parse_mode: "HTML"
-          }
-        );
-
-        return;
-      }
-
-      /* ============================
-         FIND CONNECTED TICKET
-      ============================ */
-
-      const session =
-        activeTickets.get(
-          String(chatId)
-        );
-
-      if (!session) {
-        return;
-      }
-
-      const userLabel =
-        from.username
-          ? `@${from.username}`
-          : name;
-
-      /* ============================
-         SCREENSHOT
-      ============================ */
-
-      if (
-        message.photo &&
-        message.photo.length > 0
-      ) {
-
-        const photo =
-          message.photo[
-            message.photo.length - 1
-          ];
-
-        await telegram(
-          "sendPhoto",
-          {
-            chat_id: CHAT_ID,
-
-            photo:
-              photo.file_id,
-
-            caption:
-              `📸 PROOF FOR TICKET #` +
-              `${session.ticketId}\n` +
-              `User: ${userLabel}`
-          }
-        );
-
-        await telegram(
-          "sendMessage",
-          {
-            chat_id: chatId,
-
-            text:
-              `✅ Screenshot received for ` +
-              `ticket <b>#` +
-              `${escapeHtml(
-                session.ticketId
-              )}</b>.\n\n` +
-
-              `Your proof has been sent ` +
-              `to the support team.`,
-
-            parse_mode: "HTML"
-          }
-        );
-
-        return;
-      }
-
-      /* ============================
-         VIDEO
-      ============================ */
-
-      if (message.video) {
-
-        await telegram(
-          "sendVideo",
-          {
-            chat_id: CHAT_ID,
-
-            video:
-              message.video.file_id,
-
-            caption:
-              `🎥 VIDEO PROOF FOR TICKET #` +
-              `${session.ticketId}\n` +
-              `User: ${userLabel}`
-          }
-        );
-
-        await telegram(
-          "sendMessage",
-          {
-            chat_id: chatId,
-
-            text:
-              `✅ Video received for ` +
-              `ticket <b>#` +
-              `${escapeHtml(
-                session.ticketId
-              )}</b>.\n\n` +
-
-              `Your proof has been sent ` +
-              `to the support team.`,
-
-            parse_mode: "HTML"
-          }
-        );
-
-        return;
-      }
-
-      /* ============================
-         NORMAL USER MESSAGE
-      ============================ */
-
-      if (
-        text &&
-        !text.startsWith("/")
-      ) {
-
-        await telegram(
-          "sendMessage",
-          {
-            chat_id: CHAT_ID,
-
-            text:
-              `💬 <b>MESSAGE FOR TICKET #` +
-              `${escapeHtml(
-                session.ticketId
-              )}</b>\n\n` +
-
-              `<b>User:</b> ` +
-              `${escapeHtml(
-                userLabel
-              )}\n\n` +
-
-              escapeHtml(text),
-
-            parse_mode: "HTML"
-          }
-        );
-
-        await telegram(
-          "sendMessage",
-          {
-            chat_id: chatId,
-
-            text:
-              `✅ Your message has been ` +
-              `sent to support for ticket ` +
-              `<b>#${escapeHtml(
-                session.ticketId
-              )}</b>.`,
-
-            parse_mode: "HTML"
-          }
-        );
-      }
-
-    } catch (error) {
-
+    if (!BOT_TOKEN) {
       console.error(
-        "telegram webhook error:",
-        error
+        "BOT_TOKEN is missing"
       );
+
+      return;
     }
-  }
-);
 
-/* ================================
-   START SERVER
-================================ */
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `BATTLE X7 ARENA Telegram backend ` +
-      `running on port ${PORT}`
+    // ========================================================
+    // MESSAGE
+    // ========================================================
+
+    const message = update.message;
+
+    if (!message) {
+      return;
+    }
+
+
+    const chatId = message.chat.id;
+
+    const text =
+      message.text || "";
+
+
+    // ========================================================
+    // /START
+    // ========================================================
+
+    if (
+      text.startsWith("/start")
+    ) {
+
+      const parts =
+        text.trim().split(/\s+/);
+
+      const payload =
+        parts[1] || "";
+
+
+      // --------------------------------------------
+      // No ticket ID
+      // --------------------------------------------
+
+      if (!payload) {
+
+        await telegram("sendMessage", {
+
+          chat_id: chatId,
+
+          text:
+`👋 Welcome to BATTLE X7 ARENA Support.
+
+Please open your ticket from the app using:
+
+"Open Ticket in Telegram"
+
+This will connect your Telegram chat with your support ticket.`
+        });
+
+        return;
+      }
+
+
+      // --------------------------------------------
+      // Detect proof type
+      // --------------------------------------------
+
+      let proofType = "screenshot";
+
+      let ticketId = payload;
+
+
+      if (payload.startsWith("v_")) {
+
+        proofType = "video";
+
+        ticketId =
+          payload.substring(2);
+
+      }
+
+
+      if (payload.startsWith("p_")) {
+
+        proofType = "screenshot";
+
+        ticketId =
+          payload.substring(2);
+
+      }
+
+
+      // --------------------------------------------
+      // Ask for required proof
+      // --------------------------------------------
+
+      if (proofType === "video") {
+
+        await telegram("sendMessage", {
+
+          chat_id: chatId,
+
+          text:
+`🎫 Ticket: #${ticketId}
+
+⚠️ Your ticket requires VIDEO proof.
+
+Please send the required video here in this Telegram chat.
+
+🎥 Send the video directly in this chat.
+
+Once received, our support team will review it.`
+        });
+
+      } else {
+
+        await telegram("sendMessage", {
+
+          chat_id: chatId,
+
+          text:
+`🎫 Ticket: #${ticketId}
+
+📸 Your ticket requires SCREENSHOT proof.
+
+Please send the required screenshot here in this Telegram chat.
+
+🖼️ Send the screenshot directly in this chat.
+
+Once received, our support team will review it.`
+        });
+
+      }
+
+
+      return;
+    }
+
+
+    // ========================================================
+    // PHOTO / SCREENSHOT
+    // ========================================================
+
+    if (
+      message.photo &&
+      message.photo.length > 0
+    ) {
+
+      const photo =
+        message.photo[
+          message.photo.length - 1
+        ];
+
+
+      const caption =
+        message.caption || "No caption";
+
+
+      const groupCaption =
+`📸 SUPPORT PROOF RECEIVED
+
+👤 Telegram User:
+${message.from?.username
+  ? "@" + message.from.username
+  : "ID: " + message.from?.id}
+
+🆔 Telegram ID:
+${message.from?.id || "N/A"}
+
+📋 Caption:
+${caption}
+
+━━━━━━━━━━━━━━━━━━
+Screenshot received from user.
+`;
+
+
+      // Send photo to support group
+      await telegram("sendPhoto", {
+
+        chat_id: CHAT_ID,
+
+        photo: photo.file_id,
+
+        caption: groupCaption
+      });
+
+
+      // Confirm to user
+      await telegram("sendMessage", {
+
+        chat_id: chatId,
+
+        text:
+`✅ Screenshot received successfully.
+
+Your proof has been sent to the BATTLE X7 ARENA support team.
+
+🎫 Your ticket is now under review.`
+      });
+
+
+      return;
+    }
+
+
+    // ========================================================
+    // VIDEO
+    // ========================================================
+
+    if (message.video) {
+
+      const video =
+        message.video.file_id;
+
+
+      const caption =
+        message.caption || "No caption";
+
+
+      const groupCaption =
+`🎥 SUPPORT VIDEO PROOF RECEIVED
+
+👤 Telegram User:
+${message.from?.username
+  ? "@" + message.from.username
+  : "ID: " + message.from?.id}
+
+🆔 Telegram ID:
+${message.from?.id || "N/A"}
+
+📋 Caption:
+${caption}
+
+━━━━━━━━━━━━━━━━━━
+Video proof received from user.
+`;
+
+
+      // Send video to support group
+      await telegram("sendVideo", {
+
+        chat_id: CHAT_ID,
+
+        video: video,
+
+        caption: groupCaption
+      });
+
+
+      // Confirm to user
+      await telegram("sendMessage", {
+
+        chat_id: chatId,
+
+        text:
+`✅ Video received successfully.
+
+Your proof has been sent to the BATTLE X7 ARENA support team.
+
+🎫 Your ticket is now under review.`
+      });
+
+
+      return;
+    }
+
+
+    // ========================================================
+    // OTHER TEXT MESSAGE
+    // ========================================================
+
+    if (
+      text &&
+      !text.startsWith("/start")
+    ) {
+
+      await telegram("sendMessage", {
+
+        chat_id: chatId,
+
+        text:
+`📩 Message received.
+
+For an existing support ticket, please send the screenshot or video requested by the bot.
+
+If you have not connected your ticket yet, please open "Open Ticket in Telegram" from the BATTLE X7 ARENA app.`
+      });
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      "WEBHOOK ERROR:",
+      error
     );
+
+    // Do not try to send another HTTP response here.
+    // Telegram already received 200 above.
+
   }
-);
+
+});
+
+
+// ============================================================
+// SET WEBHOOK
+// ============================================================
+
+app.get("/set-webhook", async (req, res) => {
+
+  try {
+
+    if (!BOT_TOKEN) {
+
+      return res.status(500).json({
+        ok: false,
+        error: "BOT_TOKEN is not configured"
+      });
+
+    }
+
+
+    const webhookUrl =
+      "https://battlex7-telegram-backend-2.onrender.com/telegram/webhook";
+
+
+    const result =
+      await telegram("setWebhook", {
+        url: webhookUrl
+      });
+
+
+    res.json({
+      ok: result.ok,
+      webhookUrl: webhookUrl,
+      telegram: result
+    });
+
+
+  } catch (error) {
+
+    console.error(
+      "SET WEBHOOK ERROR:",
+      error
+    );
+
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+
+  }
+
+});
+
+
+// ============================================================
+// WEBHOOK INFO
+// ============================================================
+
+app.get("/webhook-info", async (req, res) => {
+
+  try {
+
+    if (!BOT_TOKEN) {
+
+      return res.status(500).json({
+        ok: false,
+        error: "BOT_TOKEN is not configured"
+      });
+
+    }
+
+
+    const result =
+      await telegram("getWebhookInfo", {});
+
+
+    res.json(result);
+
+
+  } catch (error) {
+
+    console.error(
+      "WEBHOOK INFO ERROR:",
+      error
+    );
+
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+
+  }
+
+});
+
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+app.listen(PORT, () => {
+
+  console.log(
+    `BATTLE X7 ARENA backend running on port ${PORT}`
+  );
+
+});
