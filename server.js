@@ -37,31 +37,115 @@ let firestore = null;
 try {
   if (!admin.apps.length) {
 
+    // --------------------------------------------------------
+    // FIREBASE SERVICE ACCOUNT JSON
+    // --------------------------------------------------------
+
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 
+      const rawJson =
+        String(
+          process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+        ).trim();
+
       const serviceAccount =
-        JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+        JSON.parse(rawJson);
 
       admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
+        credential:
+          admin.credential.cert(
+            serviceAccount
+          )
       });
 
-    } else if (
+    }
+
+    // --------------------------------------------------------
+    // FIREBASE SEPARATE ENVIRONMENT VARIABLES
+    // --------------------------------------------------------
+
+    else if (
       process.env.FIREBASE_PROJECT_ID &&
       process.env.FIREBASE_CLIENT_EMAIL &&
       process.env.FIREBASE_PRIVATE_KEY
     ) {
 
+      let privateKey =
+        String(
+          process.env.FIREBASE_PRIVATE_KEY
+        ).trim();
+
+      // Remove accidental surrounding quotes.
+      if (
+        privateKey.startsWith('"') &&
+        privateKey.endsWith('"')
+      ) {
+        privateKey =
+          privateKey.slice(
+            1,
+            -1
+          );
+      }
+
+      // Convert literal \n characters into real
+      // new-line characters.
+      privateKey =
+        privateKey.replace(
+          /\\n/g,
+          "\n"
+        );
+
+      // Normalize Windows line endings.
+      privateKey =
+        privateKey.replace(
+          /\r\n/g,
+          "\n"
+        );
+
+      // Remove accidental spaces/newlines
+      // around the complete PEM value.
+      privateKey =
+        privateKey.trim();
+
+      // Validate PEM structure before initializing.
+      if (
+        !privateKey.includes(
+          "-----BEGIN PRIVATE KEY-----"
+        ) ||
+        !privateKey.includes(
+          "-----END PRIVATE KEY-----"
+        )
+      ) {
+
+        throw new Error(
+          "FIREBASE_PRIVATE_KEY does not contain a valid PEM private key"
+        );
+      }
+
       admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey:
-            process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
-        })
+        credential:
+          admin.credential.cert({
+            projectId:
+              String(
+                process.env.FIREBASE_PROJECT_ID
+              ).trim(),
+
+            clientEmail:
+              String(
+                process.env.FIREBASE_CLIENT_EMAIL
+              ).trim(),
+
+            privateKey
+          })
       });
 
-    } else {
+    }
+
+    // --------------------------------------------------------
+    // MISSING FIREBASE CREDENTIALS
+    // --------------------------------------------------------
+
+    else {
 
       console.error(
         "FIREBASE ADMIN INIT ERROR: Firebase credentials missing"
@@ -69,13 +153,26 @@ try {
     }
   }
 
+  // ----------------------------------------------------------
+  // FIREBASE READY
+  // ----------------------------------------------------------
+
   if (admin.apps.length) {
-    firestore = admin.firestore();
+
+    firestore =
+      admin.firestore();
+
     firebaseReady = true;
-    console.log("Firebase Admin initialized successfully.");
+
+    console.log(
+      "Firebase Admin initialized successfully."
+    );
   }
 
 } catch (error) {
+
+  firebaseReady = false;
+  firestore = null;
 
   console.error(
     "FIREBASE ADMIN INIT ERROR:",
@@ -102,9 +199,15 @@ async function requireFirebaseUser(req, res) {
   }
 
   const authHeader =
-    String(req.headers.authorization || "");
+    String(
+      req.headers.authorization || ""
+    );
 
-  if (!authHeader.startsWith("Bearer ")) {
+  if (
+    !authHeader.startsWith(
+      "Bearer "
+    )
+  ) {
 
     res.status(401).json({
       ok: false,
@@ -116,7 +219,9 @@ async function requireFirebaseUser(req, res) {
   }
 
   const token =
-    authHeader.substring(7).trim();
+    authHeader
+      .substring(7)
+      .trim();
 
   if (!token) {
 
@@ -155,9 +260,11 @@ async function requireFirebaseUser(req, res) {
 async function initDatabase() {
 
   if (!pool) {
+
     console.log(
       "DATABASE: DATABASE_URL is not configured"
     );
+
     return;
   }
 
@@ -229,562 +336,634 @@ async function initDatabase() {
 // DATABASE HEALTH
 // ============================================================
 
-app.get("/database/health", async (req, res) => {
+app.get(
+  "/database/health",
+  async (req, res) => {
 
-  if (!pool) {
+    if (!pool) {
 
-    return res.status(503).json({
-      ok: false,
-      databaseConfigured: false
-    });
+      return res.status(503).json({
+        ok: false,
+        databaseConfigured: false
+      });
+    }
+
+    try {
+
+      await pool.query(
+        "SELECT 1"
+      );
+
+      res.json({
+        ok: true,
+        databaseConfigured: true
+      });
+
+    } catch (error) {
+
+      res.status(500).json({
+        ok: false,
+        databaseConfigured: true,
+        error:
+          "Database connection failed"
+      });
+    }
   }
-
-  try {
-
-    await pool.query("SELECT 1");
-
-    res.json({
-      ok: true,
-      databaseConfigured: true
-    });
-
-  } catch (error) {
-
-    res.status(500).json({
-      ok: false,
-      databaseConfigured: true,
-      error:
-        "Database connection failed"
-    });
-  }
-});
+);
 
 
 // ============================================================
 // REFERRAL VALIDATE
 // ============================================================
 
-app.get("/referral/validate", async (req, res) => {
+app.get(
+  "/referral/validate",
+  async (req, res) => {
 
-  if (!pool) {
+    if (!pool) {
 
-    return res.status(503).json({
-      ok: false,
-      error:
-        "Database not configured"
-    });
-  }
-
-  const code =
-    String(req.query.code || "")
-      .trim()
-      .toUpperCase();
-
-  if (!code) {
-
-    return res.status(400).json({
-      ok: false,
-      valid: false,
-      error:
-        "Referral code is required"
-    });
-  }
-
-  try {
-
-    const result = await pool.query(
-      `
-      SELECT user_id, referral_code
-      FROM users
-      WHERE referral_code = $1
-      LIMIT 1
-      `,
-      [code]
-    );
-
-    if (result.rowCount) {
-
-      return res.json({
-        ok: true,
-        valid: true,
-        inviterUserId:
-          result.rows[0].user_id
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Database not configured"
       });
     }
 
-    if (firebaseReady) {
+    const code =
+      String(
+        req.query.code || ""
+      )
+        .trim()
+        .toUpperCase();
 
-      const snap =
-        await firestore
-          .collection("referralCodes")
-          .doc(code)
-          .get();
+    if (!code) {
 
-      if (
-        snap.exists &&
-        snap.data()?.active !== false
-      ) {
+      return res.status(400).json({
+        ok: false,
+        valid: false,
+        error:
+          "Referral code is required"
+      });
+    }
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT user_id, referral_code
+          FROM users
+          WHERE referral_code = $1
+          LIMIT 1
+          `,
+          [code]
+        );
+
+      if (result.rowCount) {
 
         return res.json({
           ok: true,
           valid: true,
           inviterUserId:
-            snap.data()?.userId || null
+            result.rows[0].user_id
         });
       }
+
+      if (firebaseReady) {
+
+        const snap =
+          await firestore
+            .collection(
+              "referralCodes"
+            )
+            .doc(code)
+            .get();
+
+        if (
+          snap.exists &&
+          snap.data()?.active !== false
+        ) {
+
+          return res.json({
+            ok: true,
+            valid: true,
+            inviterUserId:
+              snap.data()?.userId ||
+              null
+          });
+        }
+      }
+
+      res.json({
+        ok: true,
+        valid: false,
+        inviterUserId: null
+      });
+
+    } catch (error) {
+
+      console.error(
+        "REFERRAL VALIDATE ERROR:",
+        error
+      );
+
+      res.status(500).json({
+        ok: false,
+        error:
+          "Failed to validate referral code"
+      });
     }
-
-    res.json({
-      ok: true,
-      valid: false,
-      inviterUserId: null
-    });
-
-  } catch (error) {
-
-    console.error(
-      "REFERRAL VALIDATE ERROR:",
-      error
-    );
-
-    res.status(500).json({
-      ok: false,
-      error:
-        "Failed to validate referral code"
-    });
   }
-});
+);
 
 
 // ============================================================
 // USER REGISTRATION + REFERRAL + DEVICE LOCK
 // ============================================================
 
-app.post("/users/register", async (req, res) => {
+app.post(
+  "/users/register",
+  async (req, res) => {
 
-  if (!pool) {
+    if (!pool) {
 
-    return res.status(503).json({
-      ok: false,
-      error:
-        "Database not configured"
-    });
-  }
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Database not configured"
+      });
+    }
 
-  const decoded =
-    await requireFirebaseUser(req, res);
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
 
-  if (!decoded) return;
+    if (!decoded) return;
 
-  const userId =
-    String(req.body.userId || "")
-      .trim();
+    const userId =
+      String(
+        req.body.userId || ""
+      ).trim();
 
-  const referralCode =
-    String(req.body.referralCode || "")
-      .trim()
-      .toUpperCase();
+    const referralCode =
+      String(
+        req.body.referralCode || ""
+      )
+        .trim()
+        .toUpperCase();
 
-  const deviceId =
-    String(req.body.deviceId || "")
-      .trim();
+    const deviceId =
+      String(
+        req.body.deviceId || ""
+      ).trim();
 
-  const ownReferralCode =
-    String(req.body.ownReferralCode || "")
-      .trim()
-      .toUpperCase();
-
-  if (decoded.uid !== userId) {
-
-    return res.status(403).json({
-      ok: false,
-      error:
-        "User identity mismatch"
-    });
-  }
-
-  if (
-    !userId ||
-    !deviceId ||
-    !ownReferralCode
-  ) {
-
-    return res.status(400).json({
-      ok: false,
-      error:
-        "userId, deviceId and ownReferralCode are required"
-    });
-  }
-
-  // ----------------------------------------------------------
-  // VERIFY USER'S OWN REFERRAL CODE
-  // ----------------------------------------------------------
-
-  if (firebaseReady) {
-
-    const ownCodeSnap =
-      await firestore
-        .collection("referralCodes")
-        .doc(ownReferralCode)
-        .get();
+    const ownReferralCode =
+      String(
+        req.body.ownReferralCode || ""
+      )
+        .trim()
+        .toUpperCase();
 
     if (
-      !ownCodeSnap.exists ||
-      ownCodeSnap.data()?.userId !== userId
+      decoded.uid !== userId
+    ) {
+
+      return res.status(403).json({
+        ok: false,
+        error:
+          "User identity mismatch"
+      });
+    }
+
+    if (
+      !userId ||
+      !deviceId ||
+      !ownReferralCode
     ) {
 
       return res.status(400).json({
         ok: false,
         error:
-          "Invalid own referral code"
+          "userId, deviceId and ownReferralCode are required"
       });
     }
-  }
-
-  const client =
-    await pool.connect();
-
-  try {
-
-    await client.query("BEGIN");
 
     // --------------------------------------------------------
-    // EXISTING USER
+    // VERIFY USER'S OWN REFERRAL CODE
     // --------------------------------------------------------
 
-    const existingUser =
-      await client.query(
-        `
-        SELECT *
-        FROM users
-        WHERE user_id = $1
-        FOR UPDATE
-        `,
-        [userId]
-      );
+    if (firebaseReady) {
 
-    if (existingUser.rowCount) {
+      const ownCodeSnap =
+        await firestore
+          .collection(
+            "referralCodes"
+          )
+          .doc(
+            ownReferralCode
+          )
+          .get();
 
-      const existing =
-        existingUser.rows[0];
-
-      // Do not create a new referral for an already-created
-      // account. The first registration decides the referral.
       if (
-        !existing.device_id
+        !ownCodeSnap.exists ||
+        ownCodeSnap.data()?.userId !==
+          userId
       ) {
 
-        await client.query(
-          `
-          UPDATE users
-          SET device_id = $1
-          WHERE user_id = $2
-          `,
-          [deviceId, userId]
-        );
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid own referral code"
+        });
       }
-
-      await client.query("COMMIT");
-
-      return res.json({
-        ok: true,
-        alreadyRegistered: true,
-        referralAttached:
-          !!existing.referred_by,
-        referredBy:
-          existing.referred_by || null
-      });
     }
 
-    // --------------------------------------------------------
-    // DEVICE FIRST REGISTRATION LOCK
-    // --------------------------------------------------------
+    const client =
+      await pool.connect();
 
-    const deviceResult =
+    try {
+
       await client.query(
-        `
-        SELECT
-          first_user_id,
-          first_referral_code
-        FROM device_registry
-        WHERE device_id = $1
-        FOR UPDATE
-        `,
-        [deviceId]
+        "BEGIN"
       );
 
-    let referredBy = null;
-    let referralAttached = false;
-    let historyId = null;
+      // ------------------------------------------------------
+      // EXISTING USER
+      // ------------------------------------------------------
 
-    // Only the first registration from this device can
-    // receive/attach a referral.
-    if (
-      deviceResult.rowCount === 0 &&
-      referralCode &&
-      referralCode !== ownReferralCode
-    ) {
-
-      let inviterId = null;
-
-      const inviter =
+      const existingUser =
         await client.query(
           `
-          SELECT user_id
+          SELECT *
           FROM users
-          WHERE referral_code = $1
-          LIMIT 1
+          WHERE user_id = $1
+          FOR UPDATE
           `,
-          [referralCode]
+          [userId]
         );
 
-      if (inviter.rowCount) {
+      if (
+        existingUser.rowCount
+      ) {
 
-        inviterId =
-          inviter.rows[0].user_id;
-
-      } else if (firebaseReady) {
-
-        const codeSnap =
-          await firestore
-            .collection("referralCodes")
-            .doc(referralCode)
-            .get();
+        const existing =
+          existingUser.rows[0];
 
         if (
-          codeSnap.exists &&
-          codeSnap.data()?.active !== false
+          !existing.device_id
         ) {
 
-          inviterId =
-            String(
-              codeSnap.data()?.userId || ""
-            ).trim() || null;
+          await client.query(
+            `
+            UPDATE users
+            SET device_id = $1
+            WHERE user_id = $2
+            `,
+            [
+              deviceId,
+              userId
+            ]
+          );
         }
-      }
 
-      // Self-referral protection.
-      if (
-        inviterId &&
-        inviterId !== userId
-      ) {
+        await client.query(
+          "COMMIT"
+        );
 
-        referredBy = inviterId;
-        referralAttached = true;
-      }
-    }
-
-    // --------------------------------------------------------
-    // CREATE USER
-    // --------------------------------------------------------
-
-    await client.query(
-      `
-      INSERT INTO users
-      (
-        user_id,
-        referral_code,
-        referred_by,
-        device_id,
-        created_at,
-        paid_matches,
-        referral_eligible,
-        referral_rewarded
-      )
-      VALUES
-      (
-        $1,
-        $2,
-        $3,
-        $4,
-        NOW(),
-        0,
-        FALSE,
-        FALSE
-      )
-      `,
-      [
-        userId,
-        ownReferralCode,
-        referredBy,
-        deviceId
-      ]
-    );
-
-    // --------------------------------------------------------
-    // REGISTER DEVICE
-    // --------------------------------------------------------
-
-    if (deviceResult.rowCount === 0) {
-
-      await client.query(
-        `
-        INSERT INTO device_registry
-        (
-          device_id,
-          first_user_id,
-          first_referral_code,
-          created_at
-        )
-        VALUES
-        (
-          $1,
-          $2,
-          $3,
-          NOW()
-        )
-        `,
-        [
-          deviceId,
-          userId,
-          referredBy
-            ? referralCode
-            : null
-        ]
-      );
-    }
-
-    // --------------------------------------------------------
-    // CREATE REFERRAL RECORD
-    // --------------------------------------------------------
-
-    if (referredBy) {
-
-      if (firebaseReady) {
-
-        const refDoc =
-          firestore
-            .collection("referralHistory")
-            .doc();
-
-        historyId = refDoc.id;
-
-        await refDoc.set({
-
-          referrerId:
-            referredBy,
-
-          referredUserId:
-            userId,
-
-          referredUsername:
-            String(
-              req.body.username ||
-              "User"
-            )
-              .trim()
-              .slice(0, 100),
-
-          referredEmail:
-            String(
-              req.body.email || ""
-            )
-              .trim()
-              .slice(0, 200),
-
-          referredFreeFireUid:
-            String(
-              req.body.freeFireUid || ""
-            )
-              .trim()
-              .slice(0, 30),
-
-          signupDate:
-            admin.firestore.FieldValue
-              .serverTimestamp(),
-
-          status:
-            "pending",
-
-          matchesCompleted:
-            0,
-
-          requiredMatches:
-            2,
-
-          rewardAmount:
-            10,
-
-          bonusEarned:
-            0,
-
-          rewardCredited:
-            false,
-
-          source:
-            "server"
+        return res.json({
+          ok: true,
+          alreadyRegistered: true,
+          referralAttached:
+            !!existing.referred_by,
+          referredBy:
+            existing.referred_by ||
+            null
         });
       }
 
+      // ------------------------------------------------------
+      // DEVICE FIRST REGISTRATION LOCK
+      // ------------------------------------------------------
+
+      const deviceResult =
+        await client.query(
+          `
+          SELECT
+            first_user_id,
+            first_referral_code
+          FROM device_registry
+          WHERE device_id = $1
+          FOR UPDATE
+          `,
+          [deviceId]
+        );
+
+      let referredBy = null;
+      let referralAttached = false;
+      let historyId = null;
+
+      if (
+        deviceResult.rowCount === 0 &&
+        referralCode &&
+        referralCode !==
+          ownReferralCode
+      ) {
+
+        let inviterId = null;
+
+        const inviter =
+          await client.query(
+            `
+            SELECT user_id
+            FROM users
+            WHERE referral_code = $1
+            LIMIT 1
+            `,
+            [referralCode]
+          );
+
+        if (inviter.rowCount) {
+
+          inviterId =
+            inviter.rows[0].user_id;
+
+        } else if (firebaseReady) {
+
+          const codeSnap =
+            await firestore
+              .collection(
+                "referralCodes"
+              )
+              .doc(
+                referralCode
+              )
+              .get();
+
+          if (
+            codeSnap.exists &&
+            codeSnap.data()?.active !==
+              false
+          ) {
+
+            inviterId =
+              String(
+                codeSnap.data()?.userId ||
+                  ""
+              ).trim() || null;
+          }
+        }
+
+        if (
+          inviterId &&
+          inviterId !== userId
+        ) {
+
+          referredBy =
+            inviterId;
+
+          referralAttached =
+            true;
+        }
+      }
+
+      // ------------------------------------------------------
+      // CREATE USER
+      // ------------------------------------------------------
+
       await client.query(
         `
-        INSERT INTO referrals
+        INSERT INTO users
         (
-          inviter_user_id,
-          referred_user_id,
+          user_id,
           referral_code,
-          referral_history_id
+          referred_by,
+          device_id,
+          created_at,
+          paid_matches,
+          referral_eligible,
+          referral_rewarded
         )
         VALUES
         (
           $1,
           $2,
           $3,
-          $4
+          $4,
+          NOW(),
+          0,
+          FALSE,
+          FALSE
         )
-        ON CONFLICT
-        (referred_user_id)
-        DO NOTHING
         `,
         [
-          referredBy,
           userId,
-          referralCode,
-          historyId
+          ownReferralCode,
+          referredBy,
+          deviceId
         ]
       );
-    }
 
-    await client.query("COMMIT");
+      // ------------------------------------------------------
+      // REGISTER DEVICE
+      // ------------------------------------------------------
 
-    res.json({
-      ok: true,
-      alreadyRegistered: false,
-      referralAttached,
-      referredBy
-    });
+      if (
+        deviceResult.rowCount === 0
+      ) {
 
-  } catch (error) {
+        await client.query(
+          `
+          INSERT INTO device_registry
+          (
+            device_id,
+            first_user_id,
+            first_referral_code,
+            created_at
+          )
+          VALUES
+          (
+            $1,
+            $2,
+            $3,
+            NOW()
+          )
+          `,
+          [
+            deviceId,
+            userId,
+            referredBy
+              ? referralCode
+              : null
+          ]
+        );
+      }
 
-    try {
-      await client.query("ROLLBACK");
-    } catch (_) {}
+      // ------------------------------------------------------
+      // CREATE REFERRAL RECORD
+      // ------------------------------------------------------
 
-    console.error(
-      "USER REGISTER ERROR:",
-      error
-    );
+      if (referredBy) {
 
-    if (error.code === "23505") {
+        if (firebaseReady) {
 
-      return res.status(409).json({
+          const refDoc =
+            firestore
+              .collection(
+                "referralHistory"
+              )
+              .doc();
+
+          historyId =
+            refDoc.id;
+
+          await refDoc.set({
+
+            referrerId:
+              referredBy,
+
+            referredUserId:
+              userId,
+
+            referredUsername:
+              String(
+                req.body.username ||
+                  "User"
+              )
+                .trim()
+                .slice(
+                  0,
+                  100
+                ),
+
+            referredEmail:
+              String(
+                req.body.email ||
+                  ""
+              )
+                .trim()
+                .slice(
+                  0,
+                  200
+                ),
+
+            referredFreeFireUid:
+              String(
+                req.body.freeFireUid ||
+                  ""
+              )
+                .trim()
+                .slice(
+                  0,
+                  30
+                ),
+
+            signupDate:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp(),
+
+            status:
+              "pending",
+
+            matchesCompleted:
+              0,
+
+            requiredMatches:
+              2,
+
+            rewardAmount:
+              10,
+
+            bonusEarned:
+              0,
+
+            rewardCredited:
+              false,
+
+            source:
+              "server"
+          });
+        }
+
+        await client.query(
+          `
+          INSERT INTO referrals
+          (
+            inviter_user_id,
+            referred_user_id,
+            referral_code,
+            referral_history_id
+          )
+          VALUES
+          (
+            $1,
+            $2,
+            $3,
+            $4
+          )
+          ON CONFLICT
+          (referred_user_id)
+          DO NOTHING
+          `,
+          [
+            referredBy,
+            userId,
+            referralCode,
+            historyId
+          ]
+        );
+      }
+
+      await client.query(
+        "COMMIT"
+      );
+
+      res.json({
+        ok: true,
+        alreadyRegistered: false,
+        referralAttached,
+        referredBy
+      });
+
+    } catch (error) {
+
+      try {
+        await client.query(
+          "ROLLBACK"
+        );
+      } catch (_) {}
+
+      console.error(
+        "USER REGISTER ERROR:",
+        error
+      );
+
+      if (
+        error.code ===
+        "23505"
+      ) {
+
+        return res.status(409).json({
+          ok: false,
+          error:
+            "User or referral code already exists"
+        });
+      }
+
+      res.status(500).json({
         ok: false,
         error:
-          "User or referral code already exists"
+          "Registration failed"
       });
+
+    } finally {
+
+      client.release();
     }
-
-    res.status(500).json({
-      ok: false,
-      error:
-        "Registration failed"
-    });
-
-  } finally {
-
-    client.release();
   }
-});
+);
 
 
 // ============================================================
@@ -810,24 +989,29 @@ async function creditReferralReward(
 
   const referralRef =
     firestore
-      .collection("referralHistory")
+      .collection(
+        "referralHistory"
+      )
       .doc(
         referralRow.referral_history_id
       );
 
   const referrerRef =
     firestore
-      .collection("users")
+      .collection(
+        "users"
+      )
       .doc(
         String(
           referralRow.inviter_user_id
         )
       );
 
-  // Deterministic transaction ID.
   const walletTxRef =
     firestore
-      .collection("walletTransactions")
+      .collection(
+        "walletTransactions"
+      )
       .doc(
         `referral_${referralRow.referral_history_id}`
       );
@@ -836,7 +1020,9 @@ async function creditReferralReward(
     async (tx) => {
 
       const referralSnap =
-        await tx.get(referralRef);
+        await tx.get(
+          referralRef
+        );
 
       if (!referralSnap.exists) {
 
@@ -846,18 +1032,22 @@ async function creditReferralReward(
       }
 
       const referral =
-        referralSnap.data() || {};
+        referralSnap.data() ||
+        {};
 
-      // Already rewarded = do nothing.
       if (
-        referral.rewardCredited === true ||
-        referral.status === "completed"
+        referral.rewardCredited ===
+          true ||
+        referral.status ===
+          "completed"
       ) {
         return;
       }
 
       const referrerSnap =
-        await tx.get(referrerRef);
+        await tx.get(
+          referrerRef
+        );
 
       if (!referrerSnap.exists) {
 
@@ -866,31 +1056,32 @@ async function creditReferralReward(
         );
       }
 
-      // ------------------------------------------------------
-      // WALLET CREDIT
-      // ------------------------------------------------------
-
       tx.set(
         referrerRef,
         {
           walletBalance:
-            admin.firestore.FieldValue
-              .increment(reward),
+            admin.firestore
+              .FieldValue
+              .increment(
+                reward
+              ),
 
           referralRewardsEarned:
-            admin.firestore.FieldValue
-              .increment(reward),
+            admin.firestore
+              .FieldValue
+              .increment(
+                reward
+              ),
 
           updatedAt:
-            admin.firestore.FieldValue
+            admin.firestore
+              .FieldValue
               .serverTimestamp()
         },
-        { merge: true }
+        {
+          merge: true
+        }
       );
-
-      // ------------------------------------------------------
-      // ONE-TIME WALLET TRANSACTION
-      // ------------------------------------------------------
 
       tx.set(
         walletTxRef,
@@ -923,17 +1114,14 @@ async function creditReferralReward(
             referralRow.referred_user_id,
 
           createdAt:
-            admin.firestore.FieldValue
+            admin.firestore
+              .FieldValue
               .serverTimestamp()
         },
         {
           merge: false
         }
       );
-
-      // ------------------------------------------------------
-      // COMPLETE REFERRAL
-      // ------------------------------------------------------
 
       tx.set(
         referralRef,
@@ -954,11 +1142,13 @@ async function creditReferralReward(
             true,
 
           qualifiedAt:
-            admin.firestore.FieldValue
+            admin.firestore
+              .FieldValue
               .serverTimestamp(),
 
           updatedAt:
-            admin.firestore.FieldValue
+            admin.firestore
+              .FieldValue
               .serverTimestamp(),
 
           source:
@@ -1003,12 +1193,14 @@ app.post(
 
     const joinRequestId =
       String(
-        req.body.joinRequestId || ""
+        req.body.joinRequestId ||
+          ""
       ).trim();
 
     const tournamentId =
       String(
-        req.body.tournamentId || ""
+        req.body.tournamentId ||
+          ""
       ).trim();
 
     if (
@@ -1034,14 +1226,14 @@ app.post(
 
     try {
 
-      // ------------------------------------------------------
-      // VERIFY REAL FIRESTORE JOIN REQUEST
-      // ------------------------------------------------------
-
       const joinSnap =
         await firestore
-          .collection("joinRequests")
-          .doc(joinRequestId)
+          .collection(
+            "joinRequests"
+          )
+          .doc(
+            joinRequestId
+          )
           .get();
 
       if (!joinSnap.exists) {
@@ -1054,13 +1246,14 @@ app.post(
       }
 
       const join =
-        joinSnap.data() || {};
+        joinSnap.data() ||
+        {};
 
-      // User ownership.
       if (
         String(
           join.userId || ""
-        ) !== referredUserId
+        ) !==
+        referredUserId
       ) {
 
         return res.status(403).json({
@@ -1070,11 +1263,11 @@ app.post(
         });
       }
 
-      // Tournament ownership.
       if (
         String(
           join.tournamentId || ""
-        ) !== tournamentId
+        ) !==
+        tournamentId
       ) {
 
         return res.status(403).json({
@@ -1103,15 +1296,11 @@ app.post(
 
       const status =
         String(
-          join.status || "pending"
+          join.status ||
+            "pending"
         )
           .trim()
           .toLowerCase();
-
-      // ------------------------------------------------------
-      // IMPORTANT:
-      // PENDING JOIN IS NOT A PAID MATCH.
-      // ------------------------------------------------------
 
       const successfulPaidStatuses =
         new Set([
@@ -1130,19 +1319,24 @@ app.post(
           status
         ) ||
 
-        join.paymentVerified === true ||
+        join.paymentVerified ===
+          true ||
 
-        join.paymentConfirmed === true ||
+        join.paymentConfirmed ===
+          true ||
 
-        join.paymentSuccess === true ||
+        join.paymentSuccess ===
+          true ||
 
         join.paid === true ||
 
         String(
-          join.paymentStatus || ""
+          join.paymentStatus ||
+            ""
         )
           .trim()
-          .toLowerCase() === "paid";
+          .toLowerCase() ===
+          "paid";
 
       if (!paymentConfirmed) {
 
@@ -1155,19 +1349,15 @@ app.post(
         });
       }
 
-      // ------------------------------------------------------
-      // DATABASE TRANSACTION
-      // ------------------------------------------------------
-
       const client =
         await pool.connect();
 
       try {
 
-        await client.query("BEGIN");
+        await client.query(
+          "BEGIN"
+        );
 
-        // Lock referral row so concurrent calls cannot
-        // increment the counter simultaneously.
         const referralResult =
           await client.query(
             `
@@ -1179,9 +1369,13 @@ app.post(
             [referredUserId]
           );
 
-        if (!referralResult.rowCount) {
+        if (
+          !referralResult.rowCount
+        ) {
 
-          await client.query("COMMIT");
+          await client.query(
+            "COMMIT"
+          );
 
           return res.json({
             ok: true,
@@ -1195,10 +1389,11 @@ app.post(
         const row =
           referralResult.rows[0];
 
-        // Already fully rewarded.
         if (row.rewarded) {
 
-          await client.query("COMMIT");
+          await client.query(
+            "COMMIT"
+          );
 
           return res.json({
             ok: true,
@@ -1241,11 +1436,14 @@ app.post(
             ]
           );
 
-        if (!eventResult.rowCount) {
+        if (
+          !eventResult.rowCount
+        ) {
 
-          await client.query("COMMIT");
+          await client.query(
+            "COMMIT"
+          );
 
-          // If reward previously failed, safely retry it.
           let rewarded = false;
 
           if (
@@ -1274,7 +1472,9 @@ app.post(
                   [referredUserId]
                 );
 
-              if (mark.rowCount > 0) {
+              if (
+                mark.rowCount > 0
+              ) {
 
                 await pool.query(
                   `
@@ -1288,7 +1488,9 @@ app.post(
                 rewarded = true;
               }
 
-            } catch (rewardError) {
+            } catch (
+              rewardError
+            ) {
 
               console.error(
                 "REFERRAL REWARD RETRY ERROR:",
@@ -1317,7 +1519,8 @@ app.post(
           Math.min(
             2,
             Number(
-              row.paid_matches || 0
+              row.paid_matches ||
+                0
             ) + 1
           );
 
@@ -1373,7 +1576,9 @@ app.post(
         ) {
 
           await firestore
-            .collection("referralHistory")
+            .collection(
+              "referralHistory"
+            )
             .doc(
               row.referral_history_id
             )
@@ -1391,7 +1596,8 @@ app.post(
                     : "pending",
 
                 updatedAt:
-                  admin.firestore.FieldValue
+                  admin.firestore
+                    .FieldValue
                     .serverTimestamp(),
 
                 source:
@@ -1403,7 +1609,9 @@ app.post(
             );
         }
 
-        await client.query("COMMIT");
+        await client.query(
+          "COMMIT"
+        );
 
         // ----------------------------------------------------
         // REWARD AFTER MATCH #2
@@ -1436,7 +1644,9 @@ app.post(
                 [referredUserId]
               );
 
-            if (mark.rowCount > 0) {
+            if (
+              mark.rowCount > 0
+            ) {
 
               await pool.query(
                 `
@@ -1450,15 +1660,14 @@ app.post(
               rewarded = true;
             }
 
-          } catch (rewardError) {
+          } catch (
+            rewardError
+          ) {
 
             console.error(
               "REFERRAL REWARD ERROR:",
               rewardError
             );
-
-            // Eligibility remains committed.
-            // Next duplicate sync can retry reward safely.
           }
         }
 
@@ -1595,51 +1804,57 @@ function getProofType(
 // HOME
 // ============================================================
 
-app.get("/", (req, res) => {
+app.get(
+  "/",
+  (req, res) => {
 
-  res.json({
-    status: "online",
-    service:
-      "BATTLE X7 ARENA Telegram Support Backend"
-  });
-});
+    res.json({
+      status: "online",
+      service:
+        "BATTLE X7 ARENA Telegram Support Backend"
+    });
+  }
+);
 
 
 // ============================================================
 // HEALTH
 // ============================================================
 
-app.get("/health", async (req, res) => {
+app.get(
+  "/health",
+  async (req, res) => {
 
-  let database = false;
+    let database = false;
 
-  if (pool) {
+    if (pool) {
 
-    try {
+      try {
 
-      await pool.query(
-        "SELECT 1"
-      );
+        await pool.query(
+          "SELECT 1"
+        );
 
-      database = true;
+        database = true;
 
-    } catch (_) {
+      } catch (_) {
 
-      database = false;
+        database = false;
+      }
     }
-  }
 
-  res.json({
-    ok: true,
-    telegramConfigured:
-      !!BOT_TOKEN,
-    chatConfigured:
-      !!CHAT_ID,
-    database,
-    firebaseConfigured:
-      firebaseReady
-  });
-});
+    res.json({
+      ok: true,
+      telegramConfigured:
+        !!BOT_TOKEN,
+      chatConfigured:
+        !!CHAT_ID,
+      database,
+      firebaseConfigured:
+        firebaseReady
+    });
+  }
+);
 
 
 // ============================================================
@@ -1733,12 +1948,16 @@ The user will be asked for this proof in Telegram.
         await telegram(
           "sendMessage",
           {
-            chat_id: CHAT_ID,
-            text: message
+            chat_id:
+              CHAT_ID,
+            text:
+              message
           }
         );
 
-      if (!telegramResult.ok) {
+      if (
+        !telegramResult.ok
+      ) {
 
         console.error(
           "Telegram sendMessage failed:",
@@ -1765,7 +1984,8 @@ The user will be asked for this proof in Telegram.
         ticketId,
         telegramMessageId:
           telegramResult.result
-            ?.message_id || null,
+            ?.message_id ||
+          null,
         proofType,
         telegramUrl
       });
@@ -1805,7 +2025,6 @@ app.post(
         JSON.stringify(update)
       );
 
-      // Telegram must receive 200 immediately.
       res.sendStatus(200);
 
       if (!BOT_TOKEN) {
@@ -1835,7 +2054,9 @@ app.post(
       // --------------------------------------------------------
 
       if (
-        text.startsWith("/start")
+        text.startsWith(
+          "/start"
+        )
       ) {
 
         const parts =
@@ -1851,7 +2072,9 @@ app.post(
           await telegram(
             "sendMessage",
             {
-              chat_id: chatId,
+              chat_id:
+                chatId,
+
               text:
 `👋 Welcome to BATTLE X7 ARENA Support.
 
@@ -1873,35 +2096,46 @@ This will connect your Telegram chat with your support ticket.`
           payload;
 
         if (
-          payload.startsWith("v_")
+          payload.startsWith(
+            "v_"
+          )
         ) {
 
           proofType =
             "video";
 
           ticketId =
-            payload.substring(2);
+            payload.substring(
+              2
+            );
         }
 
         if (
-          payload.startsWith("p_")
+          payload.startsWith(
+            "p_"
+          )
         ) {
 
           proofType =
             "screenshot";
 
           ticketId =
-            payload.substring(2);
+            payload.substring(
+              2
+            );
         }
 
         if (
-          proofType === "video"
+          proofType ===
+          "video"
         ) {
 
           await telegram(
             "sendMessage",
             {
-              chat_id: chatId,
+              chat_id:
+                chatId,
+
               text:
 `🎫 Ticket: #${ticketId}
 
@@ -1920,7 +2154,9 @@ Once received, our support team will review it.`
           await telegram(
             "sendMessage",
             {
-              chat_id: chatId,
+              chat_id:
+                chatId,
+
               text:
 `🎫 Ticket: #${ticketId}
 
@@ -1981,9 +2217,12 @@ Screenshot received from user.
         await telegram(
           "sendPhoto",
           {
-            chat_id: CHAT_ID,
+            chat_id:
+              CHAT_ID,
+
             photo:
               photo.file_id,
+
             caption:
               groupCaption
           }
@@ -1992,7 +2231,9 @@ Screenshot received from user.
         await telegram(
           "sendMessage",
           {
-            chat_id: chatId,
+            chat_id:
+              chatId,
+
             text:
 `✅ Screenshot received successfully.
 
@@ -2045,8 +2286,11 @@ Video proof received from user.
         await telegram(
           "sendVideo",
           {
-            chat_id: CHAT_ID,
+            chat_id:
+              CHAT_ID,
+
             video,
+
             caption:
               groupCaption
           }
@@ -2055,7 +2299,9 @@ Video proof received from user.
         await telegram(
           "sendMessage",
           {
-            chat_id: chatId,
+            chat_id:
+              chatId,
+
             text:
 `✅ Video received successfully.
 
@@ -2074,13 +2320,17 @@ Your proof has been sent to the BATTLE X7 ARENA support team.
 
       if (
         text &&
-        !text.startsWith("/start")
+        !text.startsWith(
+          "/start"
+        )
       ) {
 
         await telegram(
           "sendMessage",
           {
-            chat_id: chatId,
+            chat_id:
+              chatId,
+
             text:
 `📩 Message received.
 
@@ -2097,8 +2347,6 @@ If you have not connected your ticket yet, please open "Open Ticket in Telegram"
         "WEBHOOK ERROR:",
         error
       );
-
-      // Response already sent to Telegram.
     }
   }
 );
@@ -2138,7 +2386,9 @@ app.get(
       res.json({
         ok:
           result.ok,
+
         webhookUrl,
+
         telegram:
           result
       });
@@ -2185,7 +2435,9 @@ app.get(
           {}
         );
 
-      res.json(result);
+      res.json(
+        result
+      );
 
     } catch (error) {
 
@@ -2222,6 +2474,7 @@ initDatabase()
       "Database initialization failed:",
       error
     );
+
   });
 
 
