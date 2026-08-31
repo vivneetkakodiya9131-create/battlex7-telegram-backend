@@ -1162,6 +1162,618 @@ async function creditReferralReward(
   );
 }
 
+// ============================================================
+// PAYMENT SETTINGS + DEPOSIT + WITHDRAWAL
+// ============================================================
+
+// ------------------------------------------------------------
+// PAYMENT SETTINGS
+// ------------------------------------------------------------
+
+app.get(
+  "/payment/settings",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+    }
+
+    try {
+
+      const snap =
+        await firestore
+          .collection("settings")
+          .doc("payment")
+          .get();
+
+      if (!snap.exists) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Payment settings not found"
+        });
+      }
+
+      const data =
+        snap.data() || {};
+
+      res.json({
+        ok: true,
+
+        depositMode:
+          data.depositMode || "manual",
+
+        withdrawalMode:
+          data.withdrawalMode || "manual",
+
+        minDeposit:
+          Number(data.minDeposit ?? 20),
+
+        maxDeposit:
+          Number(data.maxDeposit ?? 10000),
+
+        minWithdrawal:
+          Number(data.minWithdrawal ?? 50),
+
+        maxWithdrawal:
+          Number(data.maxWithdrawal ?? 10000)
+      });
+
+    } catch (error) {
+
+      console.error(
+        "PAYMENT SETTINGS ERROR:",
+        error
+      );
+
+      res.status(500).json({
+        ok: false,
+        error:
+          "Failed to load payment settings"
+      });
+    }
+  }
+);
+
+
+// ------------------------------------------------------------
+// MANUAL DEPOSIT REQUEST
+// ------------------------------------------------------------
+
+app.post(
+  "/deposit/manual",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+    }
+
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!decoded) return;
+
+    try {
+
+      const amount =
+        Number(
+          req.body.amount
+        );
+
+      const utr =
+        String(
+          req.body.utr ||
+          req.body.transactionId ||
+          ""
+        )
+          .trim()
+          .slice(0, 100);
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Valid deposit amount is required"
+        });
+      }
+
+      if (!utr) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "UTR / Transaction ID is required"
+        });
+      }
+
+      const settingsSnap =
+        await firestore
+          .collection("settings")
+          .doc("payment")
+          .get();
+
+      const settings =
+        settingsSnap.exists
+          ? settingsSnap.data() || {}
+          : {};
+
+      const minDeposit =
+        Number(
+          settings.minDeposit ?? 20
+        );
+
+      const maxDeposit =
+        Number(
+          settings.maxDeposit ?? 10000
+        );
+
+      const depositMode =
+        String(
+          settings.depositMode ||
+          "manual"
+        )
+          .trim()
+          .toLowerCase();
+
+      if (
+        amount < minDeposit ||
+        amount > maxDeposit
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            `Deposit amount must be between ₹${minDeposit} and ₹${maxDeposit}`
+        });
+      }
+
+      if (
+        depositMode !== "manual"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Manual deposit is currently disabled"
+        });
+      }
+
+      // ------------------------------------------------------
+      // DUPLICATE UTR CHECK
+      // ------------------------------------------------------
+
+      const duplicateSnap =
+        await firestore
+          .collection("depositRequests")
+          .where(
+            "utr",
+            "==",
+            utr
+          )
+          .limit(1)
+          .get();
+
+      if (!duplicateSnap.empty) {
+
+        return res.status(409).json({
+          ok: false,
+          error:
+            "This UTR / Transaction ID has already been submitted"
+        });
+      }
+
+      // ------------------------------------------------------
+      // CREATE REQUEST
+      // ------------------------------------------------------
+
+      const requestRef =
+        firestore
+          .collection("depositRequests")
+          .doc();
+
+      await requestRef.set({
+
+        requestId:
+          requestRef.id,
+
+        userId:
+          decoded.uid,
+
+        amount,
+
+        utr,
+
+        status:
+          "pending",
+
+        mode:
+          "manual",
+
+        createdAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        updatedAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp()
+
+      });
+
+      res.json({
+
+        ok: true,
+
+        requestId:
+          requestRef.id,
+
+        status:
+          "pending",
+
+        message:
+          "Deposit request submitted successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "MANUAL DEPOSIT ERROR:",
+        error
+      );
+
+      res.status(500).json({
+        ok: false,
+        error:
+          "Failed to submit deposit request"
+      });
+    }
+  }
+);
+
+
+// ------------------------------------------------------------
+// WITHDRAWAL REQUEST
+// ------------------------------------------------------------
+
+app.post(
+  "/withdraw",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+    }
+
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!decoded) return;
+
+    try {
+
+      const amount =
+        Number(
+          req.body.amount
+        );
+
+      const upiId =
+        String(
+          req.body.upiId ||
+          ""
+        )
+          .trim()
+          .slice(0, 100);
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Valid withdrawal amount is required"
+        });
+      }
+
+      if (!upiId) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "UPI ID is required"
+        });
+      }
+
+      const settingsSnap =
+        await firestore
+          .collection("settings")
+          .doc("payment")
+          .get();
+
+      const settings =
+        settingsSnap.exists
+          ? settingsSnap.data() || {}
+          : {};
+
+      const minWithdrawal =
+        Number(
+          settings.minWithdrawal ?? 50
+        );
+
+      const maxWithdrawal =
+        Number(
+          settings.maxWithdrawal ?? 10000
+        );
+
+      const withdrawalMode =
+        String(
+          settings.withdrawalMode ||
+          "manual"
+        )
+          .trim()
+          .toLowerCase();
+
+      if (
+        amount < minWithdrawal ||
+        amount > maxWithdrawal
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            `Withdrawal amount must be between ₹${minWithdrawal} and ₹${maxWithdrawal}`
+        });
+      }
+
+      if (
+        withdrawalMode !== "manual"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Manual withdrawal is currently disabled"
+        });
+      }
+
+      // ------------------------------------------------------
+      // ATOMIC WALLET CHECK + HOLD
+      // ------------------------------------------------------
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(
+            decoded.uid
+          );
+
+      const withdrawalRef =
+        firestore
+          .collection("withdrawRequests")
+          .doc();
+
+      await firestore.runTransaction(
+        async (tx) => {
+
+          const userSnap =
+            await tx.get(
+              userRef
+            );
+
+          if (!userSnap.exists) {
+
+            throw new Error(
+              "USER_NOT_FOUND"
+            );
+          }
+
+          const user =
+            userSnap.data() || {};
+
+          const balance =
+            Number(
+              user.walletBalance || 0
+            );
+
+          if (
+            !Number.isFinite(balance) ||
+            balance < amount
+          ) {
+
+            throw new Error(
+              "INSUFFICIENT_BALANCE"
+            );
+          }
+
+          // --------------------------------------------------
+          // HOLD MONEY
+          // --------------------------------------------------
+
+          tx.update(
+            userRef,
+            {
+              walletBalance:
+                admin.firestore
+                  .FieldValue
+                  .increment(
+                    -amount
+                  ),
+
+              updatedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            }
+          );
+
+          // --------------------------------------------------
+          // CREATE WITHDRAW REQUEST
+          // --------------------------------------------------
+
+          tx.set(
+            withdrawalRef,
+            {
+
+              requestId:
+                withdrawalRef.id,
+
+              userId:
+                decoded.uid,
+
+              amount,
+
+              upiId,
+
+              status:
+                "pending",
+
+              mode:
+                "manual",
+
+              createdAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp(),
+
+              updatedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            }
+          );
+
+          // --------------------------------------------------
+          // WALLET TRANSACTION
+          // --------------------------------------------------
+
+          const walletTxRef =
+            firestore
+              .collection(
+                "walletTransactions"
+              )
+              .doc(
+                `withdraw_${withdrawalRef.id}`
+              );
+
+          tx.set(
+            walletTxRef,
+            {
+
+              userId:
+                decoded.uid,
+
+              type:
+                "withdrawal",
+
+              kind:
+                "withdrawal",
+
+              amount,
+
+              direction:
+                "debit",
+
+              status:
+                "pending",
+
+              name:
+                "Withdrawal",
+
+              detail:
+                "Withdrawal request submitted",
+
+              requestId:
+                withdrawalRef.id,
+
+              createdAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            }
+          );
+        }
+      );
+
+      res.json({
+
+        ok: true,
+
+        requestId:
+          withdrawalRef.id,
+
+        status:
+          "pending",
+
+        message:
+          "Withdrawal request submitted successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "WITHDRAWAL ERROR:",
+        error
+      );
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User account not found"
+        });
+      }
+
+      if (
+        error.message ===
+        "INSUFFICIENT_BALANCE"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Insufficient wallet balance"
+        });
+      }
+
+      res.status(500).json({
+        ok: false,
+        error:
+          "Failed to create withdrawal request"
+      });
+    }
+  }
+);
 
 // ============================================================
 // REAL PAID MATCH
