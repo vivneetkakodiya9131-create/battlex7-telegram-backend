@@ -2839,6 +2839,248 @@ app.post(
 
 
 // ============================================================
+// SMART SUNDAY MEMORY
+// ============================================================
+
+const ADMIN_UID = process.env.ADMIN_UID || "";
+
+async function requireAdmin(req, res) {
+  const decoded = await requireFirebaseUser(req, res);
+
+  if (!decoded) return null;
+
+  if (!ADMIN_UID) {
+    res.status(503).json({
+      ok: false,
+      error: "ADMIN_UID is not configured"
+    });
+    return null;
+  }
+
+  if (decoded.uid !== ADMIN_UID) {
+    res.status(403).json({
+      ok: false,
+      error: "Admin access required"
+    });
+    return null;
+  }
+
+  return decoded;
+}
+
+// ------------------------------------------------------------
+// CREATE SMART SUNDAY MEMORY TABLE
+// ------------------------------------------------------------
+
+async function initSmartSundayMemory() {
+  if (!pool) {
+    console.log(
+      "SMART SUNDAY MEMORY: DATABASE_URL is not configured"
+    );
+    return;
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS smart_sunday_memory (
+      id SERIAL PRIMARY KEY,
+      memory_key TEXT NOT NULL UNIQUE,
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      updated_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  console.log(
+    "Smart Sunday Memory database initialized."
+  );
+}
+
+// ------------------------------------------------------------
+// SAVE / UPDATE SUNDAY MEMORY
+// ------------------------------------------------------------
+
+app.post("/admin/smart-sunday-memory", async (req, res) => {
+  const adminUser = await requireAdmin(req, res);
+
+  if (!adminUser) return;
+
+  if (!pool) {
+    return res.status(503).json({
+      ok: false,
+      error: "Database not configured"
+    });
+  }
+
+  try {
+    const settings =
+      req.body?.settings || {};
+
+    await pool.query(
+      `
+      INSERT INTO smart_sunday_memory
+      (
+        memory_key,
+        settings,
+        active,
+        updated_by,
+        updated_at
+      )
+      VALUES
+      (
+        'sunday_default',
+        $1::jsonb,
+        $2,
+        $3,
+        NOW()
+      )
+      ON CONFLICT (memory_key)
+      DO UPDATE SET
+        settings = EXCLUDED.settings,
+        active = EXCLUDED.active,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = NOW()
+      `,
+      [
+        JSON.stringify(settings),
+        req.body?.active !== false,
+        adminUser.uid
+      ]
+    );
+
+    return res.json({
+      ok: true,
+      message: "Smart Sunday Memory saved successfully"
+    });
+
+  } catch (error) {
+    console.error(
+      "SMART SUNDAY MEMORY SAVE ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to save Smart Sunday Memory"
+    });
+  }
+});
+
+// ------------------------------------------------------------
+// GET SUNDAY MEMORY
+// ------------------------------------------------------------
+
+app.get("/smart-sunday-memory", async (req, res) => {
+  if (!pool) {
+    return res.status(503).json({
+      ok: false,
+      error: "Database not configured"
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        memory_key,
+        settings,
+        active,
+        updated_by,
+        created_at,
+        updated_at
+      FROM smart_sunday_memory
+      WHERE memory_key = 'sunday_default'
+      LIMIT 1
+      `
+    );
+
+    if (!result.rowCount) {
+      return res.json({
+        ok: true,
+        exists: false,
+        memory: null
+      });
+    }
+
+    const row = result.rows[0];
+
+    return res.json({
+      ok: true,
+      exists: true,
+      memory: {
+        settings: row.settings || {},
+        active: row.active,
+        updatedBy: row.updated_by,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error(
+      "SMART SUNDAY MEMORY GET ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load Smart Sunday Memory"
+    });
+  }
+});
+
+// ------------------------------------------------------------
+// DELETE / RESET SUNDAY MEMORY
+// ------------------------------------------------------------
+
+app.delete(
+  "/admin/smart-sunday-memory",
+  async (req, res) => {
+
+    const adminUser =
+      await requireAdmin(req, res);
+
+    if (!adminUser) return;
+
+    if (!pool) {
+      return res.status(503).json({
+        ok: false,
+        error: "Database not configured"
+      });
+    }
+
+    try {
+      await pool.query(
+        `
+        DELETE FROM smart_sunday_memory
+        WHERE memory_key = 'sunday_default'
+        `
+      );
+
+      return res.json({
+        ok: true,
+        message:
+          "Smart Sunday Memory reset successfully"
+      });
+
+    } catch (error) {
+      console.error(
+        "SMART SUNDAY MEMORY DELETE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to reset Smart Sunday Memory"
+      });
+    }
+  }
+);
+
+
+// ============================================================
 // TELEGRAM HELPERS
 // ============================================================
 
@@ -3578,10 +3820,20 @@ app.get(
 // ============================================================
 
 initDatabase()
-  .then(() => {
+  .then(async () => {
 
     console.log(
       "Database initialization complete"
+    );
+
+    // --------------------------------------------------------
+    // SMART SUNDAY MEMORY INITIALIZATION
+    // --------------------------------------------------------
+
+    await initSmartSundayMemory();
+
+    console.log(
+      "Smart Sunday Memory initialization complete"
     );
 
   })
