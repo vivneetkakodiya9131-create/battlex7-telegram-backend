@@ -2328,6 +2328,517 @@ app.post(
 
 
 // ============================================================
+// 5-MIN ROOM UNLOCK + JOINED-USER-ONLY ROOM
+// ============================================================
+
+const ROOM_UNLOCK_MINUTES = 5;
+
+// ------------------------------------------------------------
+// ADMIN CHECK
+// ------------------------------------------------------------
+
+async function requireAdmin(req, res) {
+  const decoded = await requireFirebaseUser(req, res);
+
+  if (!decoded) return null;
+
+  const adminUid = String(
+    process.env.ADMIN_UID || ""
+  ).trim();
+
+  if (!adminUid) {
+    res.status(503).json({
+      ok: false,
+      error: "ADMIN_UID is not configured"
+    });
+
+    return null;
+  }
+
+  if (decoded.uid !== adminUid) {
+    res.status(403).json({
+      ok: false,
+      error: "Admin access required"
+    });
+
+    return null;
+  }
+
+  return decoded;
+}
+
+
+// ============================================================
+// CREATE / UPDATE ROOM
+// ADMIN ONLY
+// ============================================================
+
+app.post("/room/create", async (req, res) => {
+
+  if (!firebaseReady) {
+    return res.status(503).json({
+      ok: false,
+      error: "Firebase is not configured"
+    });
+  }
+
+  const adminUser = await requireAdmin(req, res);
+
+  if (!adminUser) return;
+
+  const tournamentId = String(
+    req.body.tournamentId || ""
+  ).trim();
+
+  const roomId = String(
+    req.body.roomId || ""
+  ).trim();
+
+  const roomPassword = String(
+    req.body.roomPassword || ""
+  ).trim();
+
+  const unlockMinutes = Number(
+    req.body.unlockMinutes ??
+    ROOM_UNLOCK_MINUTES
+  );
+
+  if (!tournamentId || !roomId || !roomPassword) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        "tournamentId, roomId and roomPassword are required"
+    });
+  }
+
+  if (
+    !Number.isFinite(unlockMinutes) ||
+    unlockMinutes < 1 ||
+    unlockMinutes > 60
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        "unlockMinutes must be between 1 and 60"
+    });
+  }
+
+  try {
+
+    const roomRef = firestore
+      .collection("tournamentRooms")
+      .doc(tournamentId);
+
+    const unlockAt = new Date(
+      Date.now() +
+      unlockMinutes * 60 * 1000
+    );
+
+    await roomRef.set(
+      {
+        tournamentId,
+        roomId,
+        roomPassword,
+
+        unlockAt:
+          admin.firestore.Timestamp.fromDate(
+            unlockAt
+          ),
+
+        unlockMinutes,
+
+        roomUnlocked: false,
+
+        joinedUsersOnly: true,
+
+        createdBy:
+          adminUser.uid,
+
+        createdAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+
+        updatedAt:
+          admin.firestore.FieldValue.serverTimestamp()
+      },
+      {
+        merge: true
+      }
+    );
+
+    return res.json({
+      ok: true,
+      tournamentId,
+      unlockAt:
+        unlockAt.toISOString(),
+      unlockMinutes,
+      joinedUsersOnly: true
+    });
+
+  } catch (error) {
+
+    console.error(
+      "ROOM CREATE ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to create room"
+    });
+  }
+});
+
+
+// ============================================================
+// ROOM ACCESS
+// ONLY JOINED USERS CAN GET ROOM DETAILS
+// ============================================================
+
+app.get(
+  "/room/:tournamentId",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase is not configured"
+      });
+    }
+
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!decoded) return;
+
+    const tournamentId =
+      String(
+        req.params.tournamentId || ""
+      ).trim();
+
+    if (!tournamentId) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Tournament ID is required"
+      });
+    }
+
+    try {
+
+      // ------------------------------------------------------
+      // FIND ROOM
+      // ------------------------------------------------------
+
+      const roomSnap =
+        await firestore
+          .collection(
+            "tournamentRooms"
+          )
+          .doc(tournamentId)
+          .get();
+
+      if (!roomSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Room not available"
+        });
+      }
+
+      const room =
+        roomSnap.data() || {};
+
+      // ------------------------------------------------------
+      // CHECK JOIN REQUEST
+      // ------------------------------------------------------
+
+      const joinQuery =
+        await firestore
+          .collection(
+            "joinRequests"
+          )
+          .where(
+            "userId",
+            "==",
+            decoded.uid
+          )
+          .where(
+            "tournamentId",
+            "==",
+            tournamentId
+          )
+          .limit(10)
+          .get();
+
+      if (joinQuery.empty) {
+
+        return res.status(403).json({
+          ok: false,
+          joined: false,
+          roomUnlocked: false,
+          error:
+            "Only joined users can access the room"
+        });
+      }
+
+      // ------------------------------------------------------
+      // VERIFY JOIN STATUS
+      // ------------------------------------------------------
+
+      let joined = false;
+
+      joinQuery.forEach((doc) => {
+
+        const join =
+          doc.data() || {};
+
+        const status =
+          String(
+            join.status ||
+            ""
+          )
+            .trim()
+            .toLowerCase();
+
+        const validStatuses =
+          new Set([
+            "approved",
+            "accepted",
+            "success",
+            "successful",
+            "paid",
+            "confirmed",
+            "joined",
+            "completed"
+          ]);
+
+        if (
+          validStatuses.has(status) ||
+          join.paymentVerified === true ||
+          join.paymentConfirmed === true ||
+          join.paymentSuccess === true ||
+          join.paid === true
+        ) {
+          joined = true;
+        }
+      });
+
+      if (!joined) {
+
+        return res.status(403).json({
+          ok: false,
+          joined: false,
+          roomUnlocked: false,
+          error:
+            "Valid joined-user record not found"
+        });
+      }
+
+      // ------------------------------------------------------
+      // 5-MINUTE UNLOCK CHECK
+      // ------------------------------------------------------
+
+      let unlockAtMs = 0;
+
+      if (room.unlockAt) {
+
+        if (
+          typeof room.unlockAt.toMillis ===
+          "function"
+        ) {
+          unlockAtMs =
+            room.unlockAt.toMillis();
+
+        } else if (
+          room.unlockAt._seconds
+        ) {
+          unlockAtMs =
+            Number(
+              room.unlockAt._seconds
+            ) * 1000;
+
+        } else {
+          unlockAtMs =
+            new Date(
+              room.unlockAt
+            ).getTime();
+        }
+      }
+
+      const now =
+        Date.now();
+
+      const roomUnlocked =
+        unlockAtMs > 0 &&
+        now >= unlockAtMs;
+
+      // ------------------------------------------------------
+      // STILL LOCKED
+      // ------------------------------------------------------
+
+      if (!roomUnlocked) {
+
+        const remainingMs =
+          Math.max(
+            0,
+            unlockAtMs - now
+          );
+
+        return res.json({
+          ok: true,
+
+          joined: true,
+
+          roomUnlocked: false,
+
+          unlockAt:
+            unlockAtMs
+              ? new Date(
+                  unlockAtMs
+                ).toISOString()
+              : null,
+
+          remainingSeconds:
+            Math.ceil(
+              remainingMs / 1000
+            ),
+
+          remainingMinutes:
+            Math.ceil(
+              remainingMs / 60000
+            ),
+
+          message:
+            "Room will unlock 5 minutes before the scheduled time"
+        });
+      }
+
+      // ------------------------------------------------------
+      // ROOM UNLOCKED
+      // ------------------------------------------------------
+
+      return res.json({
+        ok: true,
+
+        joined: true,
+
+        roomUnlocked: true,
+
+        tournamentId,
+
+        roomId:
+          room.roomId || "",
+
+        roomPassword:
+          room.roomPassword || "",
+
+        unlockAt:
+          new Date(
+            unlockAtMs
+          ).toISOString()
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ROOM ACCESS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to verify room access"
+      });
+    }
+  }
+);
+
+
+// ============================================================
+// MANUAL ROOM UNLOCK
+// ADMIN ONLY
+// ============================================================
+
+app.post(
+  "/room/:tournamentId/unlock",
+  async (req, res) => {
+
+    const adminUser =
+      await requireAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    const tournamentId =
+      String(
+        req.params.tournamentId || ""
+      ).trim();
+
+    if (!tournamentId) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Tournament ID is required"
+      });
+    }
+
+    try {
+
+      await firestore
+        .collection(
+          "tournamentRooms"
+        )
+        .doc(tournamentId)
+        .set(
+          {
+            roomUnlocked: true,
+
+            manuallyUnlocked: true,
+
+            unlockedBy:
+              adminUser.uid,
+
+            unlockedAt:
+              admin.firestore.FieldValue.serverTimestamp(),
+
+            updatedAt:
+              admin.firestore.FieldValue.serverTimestamp()
+          },
+          {
+            merge: true
+          }
+        );
+
+      return res.json({
+        ok: true,
+        tournamentId,
+        roomUnlocked: true
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ROOM MANUAL UNLOCK ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to unlock room"
+      });
+    }
+  }
+);
+
+
+// ============================================================
 // TELEGRAM HELPERS
 // ============================================================
 
