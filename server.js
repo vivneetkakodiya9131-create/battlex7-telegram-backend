@@ -4878,6 +4878,570 @@ app.get(
   }
 );
 
+// ============================================================
+// BATTLE X7 ARENA — EMAIL OTP SYSTEM
+// Signup Verification + Forgot Password + Login Verification
+// ============================================================
+
+const crypto = require("crypto");
+
+// ------------------------------------------------------------
+// RESEND CONFIGURATION
+// ------------------------------------------------------------
+
+const RESEND_API_KEY = String(
+  process.env.RESEND_API_KEY || ""
+).trim();
+
+const OTP_FROM_EMAIL = String(
+  process.env.OTP_FROM_EMAIL || "onboarding@resend.dev"
+).trim();
+
+// ------------------------------------------------------------
+// OTP STORAGE
+// ------------------------------------------------------------
+
+const otpStore = new Map();
+
+const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+
+// ------------------------------------------------------------
+// GENERATE OTP
+// ------------------------------------------------------------
+
+function generateOTP() {
+  return crypto
+    .randomInt(100000, 1000000)
+    .toString();
+}
+
+// ------------------------------------------------------------
+// HASH OTP
+// ------------------------------------------------------------
+
+function hashOTP(otp) {
+  return crypto
+    .createHash("sha256")
+    .update(String(otp))
+    .digest("hex");
+}
+
+// ------------------------------------------------------------
+// SEND EMAIL THROUGH RESEND
+// ------------------------------------------------------------
+
+async function sendOTPEmail(email, otp, purpose) {
+
+  if (!RESEND_API_KEY) {
+    throw new Error(
+      "RESEND_API_KEY is not configured"
+    );
+  }
+
+  const purposeText =
+    purpose === "signup"
+      ? "Email Verification"
+      : purpose === "forgot-password"
+      ? "Password Reset"
+      : "Login Verification";
+
+  const response = await fetch(
+    "https://api.resend.com/emails",
+    {
+      method: "POST",
+
+      headers: {
+        "Authorization":
+          `Bearer ${RESEND_API_KEY}`,
+
+        "Content-Type":
+          "application/json"
+      },
+
+      body: JSON.stringify({
+        from:
+          `BATTLE X7 ARENA <${OTP_FROM_EMAIL}>`,
+
+        to: [email],
+
+        subject:
+          `BATTLE X7 ARENA — Your OTP`,
+
+        html: `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+</head>
+
+<body style="
+  margin:0;
+  padding:0;
+  background:#f3f6ff;
+  font-family:Arial,sans-serif;
+">
+
+<div style="
+  max-width:500px;
+  margin:30px auto;
+  background:#ffffff;
+  border-radius:18px;
+  padding:30px;
+  text-align:center;
+  box-shadow:0 10px 30px rgba(0,0,0,.08);
+">
+
+<h2 style="
+  color:#2855d9;
+  margin-bottom:10px;
+">
+BATTLE X7 ARENA
+</h2>
+
+<p style="
+  color:#555;
+  font-size:16px;
+">
+${purposeText}
+</p>
+
+<p style="
+  color:#555;
+">
+Your One-Time Password is:
+</p>
+
+<div style="
+  display:inline-block;
+  padding:15px 25px;
+  margin:15px 0;
+  border-radius:12px;
+  background:#eef2ff;
+  color:#2855d9;
+  font-size:32px;
+  font-weight:bold;
+  letter-spacing:8px;
+">
+${otp}
+</div>
+
+<p style="
+  color:#777;
+  font-size:14px;
+">
+This OTP is valid for 5 minutes.
+</p>
+
+<p style="
+  color:#999;
+  font-size:12px;
+">
+If you did not request this code,
+you can safely ignore this email.
+</p>
+
+</div>
+
+</body>
+</html>
+`
+      })
+    }
+  );
+
+  if (!response.ok) {
+
+    let errorText = "";
+
+    try {
+      errorText =
+        await response.text();
+    } catch (_) {
+      errorText =
+        "Unknown Resend error";
+    }
+
+    throw new Error(
+      `Resend email failed: ${errorText}`
+    );
+  }
+
+  return true;
+}
+
+// ------------------------------------------------------------
+// NORMALIZE EMAIL
+// ------------------------------------------------------------
+
+function normalizeEmail(email) {
+  return String(email || "")
+    .trim()
+    .toLowerCase();
+}
+
+// ------------------------------------------------------------
+// OTP KEY
+// ------------------------------------------------------------
+
+function getOTPKey(email, purpose) {
+  return `${purpose}:${normalizeEmail(email)}`;
+}
+
+// ============================================================
+// SEND OTP
+// ============================================================
+
+app.post(
+  "/auth/otp/send",
+  async (req, res) => {
+
+    try {
+
+      const email =
+        normalizeEmail(
+          req.body?.email
+        );
+
+      const purpose =
+        String(
+          req.body?.purpose || "signup"
+        ).trim();
+
+      const allowedPurposes = [
+        "signup",
+        "forgot-password",
+        "login"
+      ];
+
+      if (!email) {
+
+        return res.status(400).json({
+          ok: false,
+          error: "Email is required"
+        });
+
+      }
+
+      if (!allowedPurposes.includes(purpose)) {
+
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid OTP purpose"
+        });
+
+      }
+
+      if (!RESEND_API_KEY) {
+
+        return res.status(503).json({
+          ok: false,
+          error:
+            "RESEND_API_KEY is not configured"
+        });
+
+      }
+
+      const key =
+        getOTPKey(
+          email,
+          purpose
+        );
+
+      const existing =
+        otpStore.get(key);
+
+      // ------------------------------------------------------
+      // RESEND COOLDOWN
+      // ------------------------------------------------------
+
+      if (
+        existing &&
+        Date.now() - existing.createdAt <
+          OTP_RESEND_COOLDOWN_MS
+      ) {
+
+        const remaining =
+          Math.ceil(
+            (
+              OTP_RESEND_COOLDOWN_MS -
+              (
+                Date.now() -
+                existing.createdAt
+              )
+            ) / 1000
+          );
+
+        return res.status(429).json({
+          ok: false,
+          error:
+            `Please wait ${remaining} seconds before requesting another OTP`,
+          retryAfterSeconds:
+            remaining
+        });
+
+      }
+
+      const otp =
+        generateOTP();
+
+      const otpHash =
+        hashOTP(otp);
+
+      otpStore.set(
+        key,
+        {
+          otpHash,
+          createdAt: Date.now(),
+          expiresAt:
+            Date.now() +
+            OTP_EXPIRY_MS,
+          attempts: 0
+        }
+      );
+
+      await sendOTPEmail(
+        email,
+        otp,
+        purpose
+      );
+
+      console.log(
+        `OTP sent successfully: ${purpose} -> ${email}`
+      );
+
+      return res.json({
+        ok: true,
+        message:
+          "OTP sent successfully",
+        purpose,
+        expiresInSeconds: 300
+      });
+
+    } catch (error) {
+
+      console.error(
+        "OTP SEND ERROR:",
+        error.message
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to send OTP"
+      });
+
+    }
+
+  }
+);
+
+// ============================================================
+// VERIFY OTP
+// ============================================================
+
+app.post(
+  "/auth/otp/verify",
+  async (req, res) => {
+
+    try {
+
+      const email =
+        normalizeEmail(
+          req.body?.email
+        );
+
+      const otp =
+        String(
+          req.body?.otp || ""
+        ).trim();
+
+      const purpose =
+        String(
+          req.body?.purpose || "signup"
+        ).trim();
+
+      if (!email) {
+
+        return res.status(400).json({
+          ok: false,
+          error: "Email is required"
+        });
+
+      }
+
+      if (!/^\d{6}$/.test(otp)) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "OTP must be a 6-digit code"
+        });
+
+      }
+
+      const key =
+        getOTPKey(
+          email,
+          purpose
+        );
+
+      const record =
+        otpStore.get(key);
+
+      if (!record) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "OTP not found or expired"
+        });
+
+      }
+
+      if (
+        Date.now() >
+        record.expiresAt
+      ) {
+
+        otpStore.delete(key);
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "OTP has expired"
+        });
+
+      }
+
+      record.attempts++;
+
+      if (
+        record.attempts >
+        OTP_MAX_ATTEMPTS
+      ) {
+
+        otpStore.delete(key);
+
+        return res.status(429).json({
+          ok: false,
+          error:
+            "Too many incorrect OTP attempts"
+        });
+
+      }
+
+      const incomingHash =
+        hashOTP(otp);
+
+      if (
+        incomingHash !==
+        record.otpHash
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Incorrect OTP",
+          attemptsRemaining:
+            Math.max(
+              0,
+              OTP_MAX_ATTEMPTS -
+              record.attempts
+            )
+        });
+
+      }
+
+      // OTP successfully verified
+      otpStore.delete(key);
+
+      console.log(
+        `OTP verified successfully: ${purpose} -> ${email}`
+      );
+
+      return res.json({
+        ok: true,
+        verified: true,
+        message:
+          "OTP verified successfully",
+        email,
+        purpose
+      });
+
+    } catch (error) {
+
+      console.error(
+        "OTP VERIFY ERROR:",
+        error.message
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to verify OTP"
+      });
+
+    }
+
+  }
+);
+
+// ============================================================
+// OTP STATUS
+// ============================================================
+
+app.get(
+  "/auth/otp/status",
+  (req, res) => {
+
+    return res.json({
+      ok: true,
+      otpSystem: true,
+      resendConfigured:
+        !!RESEND_API_KEY
+    });
+
+  }
+);
+
+// ============================================================
+// CLEAN EXPIRED OTPs
+// ============================================================
+
+setInterval(
+  () => {
+
+    const now =
+      Date.now();
+
+    for (
+      const [
+        key,
+        record
+      ] of otpStore.entries()
+    ) {
+
+      if (
+        now >
+        record.expiresAt
+      ) {
+
+        otpStore.delete(key);
+
+      }
+
+    }
+
+  },
+  60 * 1000
+);
+
+// ============================================================
+// END EMAIL OTP SYSTEM
+// ============================================================
+
 
 // ============================================================
 // START SERVER
