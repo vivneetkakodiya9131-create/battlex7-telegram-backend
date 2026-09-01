@@ -3081,6 +3081,529 @@ app.delete(
 
 
 // ============================================================
+// REMOTE THEME CONTROL
+// ============================================================
+
+const DEFAULT_THEME_CONFIG = {
+  enabled: true,
+
+  backgroundType: "color",
+
+  backgroundColor: "#070B14",
+
+  backgroundImageUrl: "",
+
+  backgroundSize: "cover",
+
+  backgroundPosition: "center",
+
+  backgroundRepeat: "no-repeat",
+
+  backgroundAttachment: "fixed",
+
+  overlayEnabled: false,
+
+  overlayColor: "#000000",
+
+  overlayOpacity: 0,
+
+  updatedAt: null,
+
+  updatedBy: null
+};
+
+
+// ------------------------------------------------------------
+// GET REMOTE THEME
+// PUBLIC ENDPOINT
+// ------------------------------------------------------------
+
+app.get("/theme", async (req, res) => {
+
+  try {
+
+    if (!firebaseReady) {
+
+      return res.json({
+        ok: true,
+        source: "default",
+        theme: DEFAULT_THEME_CONFIG
+      });
+
+    }
+
+    const snap = await firestore
+      .collection("remoteControl")
+      .doc("theme")
+      .get();
+
+    if (!snap.exists) {
+
+      return res.json({
+        ok: true,
+        source: "default",
+        theme: DEFAULT_THEME_CONFIG
+      });
+
+    }
+
+    const data = snap.data() || {};
+
+    return res.json({
+
+      ok: true,
+
+      source: "remote",
+
+      theme: {
+        ...DEFAULT_THEME_CONFIG,
+        ...data
+      }
+
+    });
+
+  } catch (error) {
+
+    console.error(
+      "GET REMOTE THEME ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load remote theme"
+    });
+
+  }
+
+});
+
+
+// ------------------------------------------------------------
+// ADMIN AUTHENTICATION
+// ------------------------------------------------------------
+
+async function requireAdmin(req, res) {
+
+  const decoded =
+    await requireFirebaseUser(
+      req,
+      res
+    );
+
+  if (!decoded) {
+    return null;
+  }
+
+  const adminUid =
+    String(
+      process.env.ADMIN_UID || ""
+    ).trim();
+
+  if (!adminUid) {
+
+    res.status(503).json({
+      ok: false,
+      error:
+        "ADMIN_UID is not configured"
+    });
+
+    return null;
+
+  }
+
+  if (decoded.uid !== adminUid) {
+
+    res.status(403).json({
+      ok: false,
+      error:
+        "Admin access denied"
+    });
+
+    return null;
+
+  }
+
+  return decoded;
+
+}
+
+
+// ------------------------------------------------------------
+// UPDATE REMOTE THEME
+// ADMIN ONLY
+// ------------------------------------------------------------
+
+app.post("/admin/theme", async (req, res) => {
+
+  try {
+
+    const adminUser =
+      await requireAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+
+    if (!firebaseReady) {
+
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+
+    }
+
+
+    const body =
+      req.body || {};
+
+
+    // --------------------------------------------------------
+    // BACKGROUND TYPE
+    // --------------------------------------------------------
+
+    const backgroundType =
+      String(
+        body.backgroundType ||
+        "color"
+      )
+        .trim()
+        .toLowerCase();
+
+
+    if (
+      ![
+        "color",
+        "image"
+      ].includes(
+        backgroundType
+      )
+    ) {
+
+      return res.status(400).json({
+        ok: false,
+        error:
+          "backgroundType must be color or image"
+      });
+
+    }
+
+
+    // --------------------------------------------------------
+    // BACKGROUND IMAGE URL
+    // --------------------------------------------------------
+
+    const backgroundImageUrl =
+      String(
+        body.backgroundImageUrl ||
+        ""
+      ).trim();
+
+
+    // --------------------------------------------------------
+    // BACKGROUND COLOR
+    // --------------------------------------------------------
+
+    const backgroundColor =
+      String(
+        body.backgroundColor ||
+        "#070B14"
+      ).trim();
+
+
+    // --------------------------------------------------------
+    // IMAGE SIZE
+    // --------------------------------------------------------
+
+    const allowedSizes = [
+      "cover",
+      "contain",
+      "auto",
+      "100% 100%"
+    ];
+
+    const backgroundSize =
+      allowedSizes.includes(
+        String(
+          body.backgroundSize || ""
+        )
+      )
+        ? String(
+            body.backgroundSize
+          )
+        : "cover";
+
+
+    // --------------------------------------------------------
+    // IMAGE POSITION
+    // --------------------------------------------------------
+
+    const backgroundPosition =
+      String(
+        body.backgroundPosition ||
+        "center"
+      ).trim();
+
+
+    // --------------------------------------------------------
+    // REPEAT
+    // --------------------------------------------------------
+
+    const backgroundRepeat =
+      String(
+        body.backgroundRepeat ||
+        "no-repeat"
+      ).trim();
+
+
+    // --------------------------------------------------------
+    // ATTACHMENT
+    // --------------------------------------------------------
+
+    const backgroundAttachment =
+      String(
+        body.backgroundAttachment ||
+        "fixed"
+      ).trim();
+
+
+    // --------------------------------------------------------
+    // OVERLAY
+    // --------------------------------------------------------
+
+    const overlayEnabled =
+      body.overlayEnabled === true;
+
+
+    const overlayColor =
+      String(
+        body.overlayColor ||
+        "#000000"
+      ).trim();
+
+
+    let overlayOpacity =
+      Number(
+        body.overlayOpacity ?? 0
+      );
+
+
+    if (
+      !Number.isFinite(
+        overlayOpacity
+      )
+    ) {
+
+      overlayOpacity = 0;
+
+    }
+
+
+    overlayOpacity =
+      Math.max(
+        0,
+        Math.min(
+          1,
+          overlayOpacity
+        )
+      );
+
+
+    // --------------------------------------------------------
+    // THEME ENABLED
+    // --------------------------------------------------------
+
+    const enabled =
+      body.enabled !== false;
+
+
+    // --------------------------------------------------------
+    // SAVE TO FIRESTORE
+    // --------------------------------------------------------
+
+    const themeRef =
+      firestore
+        .collection(
+          "remoteControl"
+        )
+        .doc("theme");
+
+
+    const themeData = {
+
+      enabled,
+
+      backgroundType,
+
+      backgroundColor,
+
+      backgroundImageUrl,
+
+      backgroundSize,
+
+      backgroundPosition,
+
+      backgroundRepeat,
+
+      backgroundAttachment,
+
+      overlayEnabled,
+
+      overlayColor,
+
+      overlayOpacity,
+
+      updatedAt:
+        admin.firestore
+          .FieldValue
+          .serverTimestamp(),
+
+      updatedBy:
+        adminUser.uid
+
+    };
+
+
+    await themeRef.set(
+      themeData,
+      {
+        merge: true
+      }
+    );
+
+
+    return res.json({
+
+      ok: true,
+
+      message:
+        "Remote theme updated successfully",
+
+      theme: {
+        ...themeData,
+
+        updatedAt:
+          new Date().toISOString(),
+
+        updatedBy:
+          adminUser.uid
+      }
+
+    });
+
+
+  } catch (error) {
+
+    console.error(
+      "REMOTE THEME UPDATE ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+
+      ok: false,
+
+      error:
+        "Failed to update remote theme"
+
+    });
+
+  }
+
+});
+
+
+// ------------------------------------------------------------
+// RESET REMOTE THEME
+// ADMIN ONLY
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/theme/reset",
+  async (req, res) => {
+
+    try {
+
+      const adminUser =
+        await requireAdmin(
+          req,
+          res
+        );
+
+      if (!adminUser) return;
+
+
+      if (!firebaseReady) {
+
+        return res.status(503).json({
+          ok: false,
+          error:
+            "Firebase is not configured"
+        });
+
+      }
+
+
+      await firestore
+        .collection(
+          "remoteControl"
+        )
+        .doc("theme")
+        .set({
+
+          ...DEFAULT_THEME_CONFIG,
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedBy:
+            adminUser.uid
+
+        });
+
+
+      return res.json({
+
+        ok: true,
+
+        message:
+          "Remote theme reset successfully",
+
+        theme:
+          DEFAULT_THEME_CONFIG
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "REMOTE THEME RESET ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Failed to reset remote theme"
+
+      });
+
+    }
+
+  }
+);
+
+
+// ============================================================
 // TELEGRAM HELPERS
 // ============================================================
 
