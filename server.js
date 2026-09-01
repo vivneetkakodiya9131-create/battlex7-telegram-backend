@@ -3607,9 +3607,6 @@ app.post(
 // REMOTE ICON CONTROL + MASTER ADMIN CONTROL
 // ============================================================
 
-const ADMIN_UID = String(
-  process.env.ADMIN_UID || ""
-).trim();
 
 // ------------------------------------------------------------
 // MASTER ADMIN AUTHENTICATION
