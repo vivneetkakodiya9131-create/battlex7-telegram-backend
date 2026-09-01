@@ -5355,38 +5355,63 @@ app.post(
       }
 
       // OTP successfully verified
-      otpStore.delete(key);
+otpStore.delete(key);
 
-      console.log(
-        `OTP verified successfully: ${purpose} -> ${email}`
-      );
-
-      return res.json({
-        ok: true,
-        verified: true,
-        message:
-          "OTP verified successfully",
-        email,
-        purpose
-      });
-
-    } catch (error) {
-
-      console.error(
-        "OTP VERIFY ERROR:",
-        error.message
-      );
-
-      return res.status(500).json({
-        ok: false,
-        error:
-          "Failed to verify OTP"
-      });
-
-    }
-
-  }
+console.log(
+  `OTP verified successfully: ${purpose} -> ${email}`
 );
+
+// ------------------------------------------------------
+// CREATE PASSWORD RESET SESSION / TOKEN
+// Only for forgot-password
+// ------------------------------------------------------
+if (purpose === "forgot-password") {
+
+  const resetToken = crypto.randomBytes(32).toString("hex");
+
+  const resetTokenRef = firestore
+    .collection("passwordResetTokens")
+    .doc(resetToken);
+
+  await resetTokenRef.set({
+    email: email,
+    createdAt:
+      admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt:
+      admin.firestore.Timestamp.fromMillis(
+        Date.now() + 10 * 60 * 1000
+      ),
+    used: false
+  });
+
+  console.log(
+    `PASSWORD RESET SESSION CREATED: ${email}`
+  );
+
+  return res.json({
+    ok: true,
+    verified: true,
+    passwordResetVerified: true,
+    resetToken: resetToken,
+    message:
+      "OTP verified successfully",
+    email,
+    purpose
+  });
+}
+
+// ------------------------------------------------------
+// NORMAL OTP VERIFICATION RESPONSE
+// Signup / Login
+// ------------------------------------------------------
+return res.json({
+  ok: true,
+  verified: true,
+  message:
+    "OTP verified successfully",
+  email,
+  purpose
+});
 
 // ============================================================
 // OTP STATUS
