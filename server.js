@@ -5413,6 +5413,24 @@ return res.json({
   purpose
 });
 
+    } catch (error) {
+
+      console.error(
+        "OTP VERIFY ERROR:",
+        error.message
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to verify OTP"
+      });
+
+    }
+
+  }
+);
+      
 // ============================================================
 // OTP STATUS
 // ============================================================
