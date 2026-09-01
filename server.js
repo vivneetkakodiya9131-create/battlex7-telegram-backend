@@ -3604,6 +3604,550 @@ app.post(
 
 
 // ============================================================
+// REMOTE ICON CONTROL + MASTER ADMIN CONTROL
+// ============================================================
+
+const ADMIN_UID = String(
+  process.env.ADMIN_UID || ""
+).trim();
+
+// ------------------------------------------------------------
+// MASTER ADMIN AUTHENTICATION
+// ------------------------------------------------------------
+
+async function requireMasterAdmin(req, res) {
+
+  if (!firebaseReady) {
+    res.status(503).json({
+      ok: false,
+      error: "Firebase Admin is not configured"
+    });
+
+    return null;
+  }
+
+  if (!ADMIN_UID) {
+    res.status(503).json({
+      ok: false,
+      error: "ADMIN_UID is not configured on server"
+    });
+
+    return null;
+  }
+
+  const authHeader = String(
+    req.headers.authorization || ""
+  );
+
+  if (!authHeader.startsWith("Bearer ")) {
+    res.status(401).json({
+      ok: false,
+      error: "Firebase ID token is required"
+    });
+
+    return null;
+  }
+
+  const token = authHeader
+    .substring(7)
+    .trim();
+
+  if (!token) {
+    res.status(401).json({
+      ok: false,
+      error: "Firebase ID token is required"
+    });
+
+    return null;
+  }
+
+  try {
+
+    const decoded = await admin
+      .auth()
+      .verifyIdToken(token);
+
+    if (decoded.uid !== ADMIN_UID) {
+
+      res.status(403).json({
+        ok: false,
+        error: "Master admin access denied"
+      });
+
+      return null;
+    }
+
+    return decoded;
+
+  } catch (error) {
+
+    console.error(
+      "MASTER ADMIN AUTH ERROR:",
+      error.message
+    );
+
+    res.status(401).json({
+      ok: false,
+      error: "Invalid or expired Firebase ID token"
+    });
+
+    return null;
+  }
+}
+
+// ============================================================
+// DEFAULT REMOTE ICON CONFIGURATION
+// ============================================================
+
+const DEFAULT_REMOTE_ICONS = {
+
+  home: {
+    enabled: true,
+    type: "emoji",
+    value: "⌂"
+  },
+
+  allMatches: {
+    enabled: true,
+    type: "emoji",
+    value: "🎮"
+  },
+
+  myMatches: {
+    enabled: true,
+    type: "emoji",
+    value: "🎯"
+  },
+
+  leaderboard: {
+    enabled: true,
+    type: "emoji",
+    value: "🏆"
+  },
+
+  profile: {
+    enabled: true,
+    type: "emoji",
+    value: "👤"
+  },
+
+  wallet: {
+    enabled: true,
+    type: "emoji",
+    value: "💰"
+  },
+
+  notification: {
+    enabled: true,
+    type: "emoji",
+    value: "🔔"
+  },
+
+  invite: {
+    enabled: true,
+    type: "emoji",
+    value: "🎁"
+  },
+
+  support: {
+    enabled: true,
+    type: "emoji",
+    value: "🎧"
+  },
+
+  rules: {
+    enabled: true,
+    type: "emoji",
+    value: "📜"
+  }
+};
+
+// ============================================================
+// GET REMOTE ICON CONFIG
+// PUBLIC ENDPOINT
+// ============================================================
+
+app.get(
+  "/remote/icons",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const ref = firestore
+        .collection("remoteConfig")
+        .doc("icons");
+
+      const snap = await ref.get();
+
+      if (!snap.exists) {
+
+        await ref.set({
+          ...DEFAULT_REMOTE_ICONS,
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+          updatedBy:
+            "system"
+        });
+
+        return res.json({
+          ok: true,
+          icons: DEFAULT_REMOTE_ICONS,
+          source: "default"
+        });
+      }
+
+      const data = snap.data() || {};
+
+      const icons = {};
+
+      for (
+        const key of Object.keys(
+          DEFAULT_REMOTE_ICONS
+        )
+      ) {
+
+        icons[key] =
+          data[key] ||
+          DEFAULT_REMOTE_ICONS[key];
+
+      }
+
+      return res.json({
+        ok: true,
+        icons,
+        source: "remote"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "REMOTE ICON GET ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to load remote icon configuration"
+      });
+    }
+  }
+);
+
+// ============================================================
+// UPDATE REMOTE ICON CONFIG
+// MASTER ADMIN ONLY
+// ============================================================
+
+app.post(
+  "/admin/remote/icons",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const incoming =
+        req.body?.icons || {};
+
+      const allowedKeys =
+        Object.keys(
+          DEFAULT_REMOTE_ICONS
+        );
+
+      const update = {};
+
+      for (const key of allowedKeys) {
+
+        if (
+          incoming[key] === undefined
+        ) {
+          continue;
+        }
+
+        const item =
+          incoming[key];
+
+        if (
+          typeof item !==
+          "object" ||
+          item === null
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              `Invalid icon configuration: ${key}`
+          });
+        }
+
+        const enabled =
+          item.enabled !== false;
+
+        const type =
+          String(
+            item.type || "emoji"
+          ).trim();
+
+        const value =
+          String(
+            item.value || ""
+          ).trim();
+
+        if (!value) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              `Icon value is required: ${key}`
+          });
+        }
+
+        if (
+          value.length > 2000
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              `Icon value is too long: ${key}`
+          });
+        }
+
+        if (
+          ![
+            "emoji",
+            "image",
+            "url",
+            "icon"
+          ].includes(type)
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              `Invalid icon type: ${key}`
+          });
+        }
+
+        update[key] = {
+          enabled,
+          type,
+          value
+        };
+      }
+
+      update.updatedAt =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      update.updatedBy =
+        adminUser.uid;
+
+      await firestore
+        .collection("remoteConfig")
+        .doc("icons")
+        .set(
+          update,
+          {
+            merge: true
+          }
+        );
+
+      const finalSnap =
+        await firestore
+          .collection("remoteConfig")
+          .doc("icons")
+          .get();
+
+      return res.json({
+        ok: true,
+        message:
+          "Remote icon configuration updated",
+        icons:
+          finalSnap.data() || {},
+        updatedBy:
+          adminUser.uid
+      });
+
+    } catch (error) {
+
+      console.error(
+        "REMOTE ICON UPDATE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to update remote icon configuration"
+      });
+    }
+  }
+);
+
+// ============================================================
+// RESET ALL ICONS TO DEFAULT
+// MASTER ADMIN ONLY
+// ============================================================
+
+app.post(
+  "/admin/remote/icons/reset",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    try {
+
+      await firestore
+        .collection("remoteConfig")
+        .doc("icons")
+        .set({
+          ...DEFAULT_REMOTE_ICONS,
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedBy:
+            adminUser.uid,
+
+          resetToDefault:
+            true
+        });
+
+      return res.json({
+        ok: true,
+        message:
+          "Remote icons reset to default",
+        icons:
+          DEFAULT_REMOTE_ICONS
+      });
+
+    } catch (error) {
+
+      console.error(
+        "REMOTE ICON RESET ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to reset remote icons"
+      });
+    }
+  }
+);
+
+// ============================================================
+// MASTER ADMIN STATUS
+// ============================================================
+
+app.get(
+  "/admin/master/status",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    return res.json({
+      ok: true,
+      masterAdmin: true,
+      uid: adminUser.uid,
+      adminConfigured:
+        !!ADMIN_UID,
+      firebaseConfigured:
+        firebaseReady
+    });
+  }
+);
+
+// ============================================================
+// MASTER ADMIN REMOTE CONFIG STATUS
+// ============================================================
+
+app.get(
+  "/admin/master/config",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    try {
+
+      const snap =
+        await firestore
+          .collection("remoteConfig")
+          .doc("icons")
+          .get();
+
+      return res.json({
+        ok: true,
+        masterAdmin: true,
+        uid: adminUser.uid,
+        iconConfigExists:
+          snap.exists,
+        icons:
+          snap.exists
+            ? snap.data()
+            : DEFAULT_REMOTE_ICONS
+      });
+
+    } catch (error) {
+
+      console.error(
+        "MASTER CONFIG ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to load master configuration"
+      });
+    }
+  }
+);
+
+
+// ============================================================
 // TELEGRAM HELPERS
 // ============================================================
 
