@@ -5444,6 +5444,184 @@ setInterval(
 
 
 // ============================================================
+// FORGOT PASSWORD - RESET PASSWORD
+// ============================================================
+
+app.post("/auth/password/reset", async (req, res) => {
+  try {
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase is not configured"
+      });
+    }
+
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
+
+    const resetToken = String(
+      req.body?.resetToken || ""
+    ).trim();
+
+    const newPassword = String(
+      req.body?.newPassword || ""
+    );
+
+    if (!email) {
+      return res.status(400).json({
+        ok: false,
+        error: "Email is required"
+      });
+    }
+
+    if (!resetToken) {
+      return res.status(400).json({
+        ok: false,
+        error: "Reset token is required"
+      });
+    }
+
+    if (!newPassword) {
+      return res.status(400).json({
+        ok: false,
+        error: "New password is required"
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        ok: false,
+        error: "Password must be at least 6 characters"
+      });
+    }
+
+    // ----------------------------------------------------------
+    // Find reset token
+    // ----------------------------------------------------------
+
+    const tokenRef = firestore
+      .collection("passwordResetTokens")
+      .doc(resetToken);
+
+    const tokenSnap = await tokenRef.get();
+
+    if (!tokenSnap.exists) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid or expired reset token"
+      });
+    }
+
+    const tokenData = tokenSnap.data() || {};
+
+    // ----------------------------------------------------------
+    // Verify email
+    // ----------------------------------------------------------
+
+    if (
+      String(tokenData.email || "")
+        .trim()
+        .toLowerCase() !== email
+    ) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid reset token"
+      });
+    }
+
+    // ----------------------------------------------------------
+    // Check expiry
+    // ----------------------------------------------------------
+
+    const expiresAt = tokenData.expiresAt;
+
+    if (
+      expiresAt &&
+      typeof expiresAt.toMillis === "function" &&
+      expiresAt.toMillis() < Date.now()
+    ) {
+      await tokenRef.delete().catch(() => {});
+
+      return res.status(401).json({
+        ok: false,
+        error: "Reset token has expired"
+      });
+    }
+
+    // ----------------------------------------------------------
+    // Prevent token reuse
+    // ----------------------------------------------------------
+
+    if (tokenData.used === true) {
+      return res.status(401).json({
+        ok: false,
+        error: "Reset token has already been used"
+      });
+    }
+
+    // ----------------------------------------------------------
+    // Find Firebase user
+    // ----------------------------------------------------------
+
+    let firebaseUser;
+
+    try {
+      firebaseUser = await admin
+        .auth()
+        .getUserByEmail(email);
+    } catch (error) {
+      return res.status(404).json({
+        ok: false,
+        error: "Account not found"
+      });
+    }
+
+    // ----------------------------------------------------------
+    // Change Firebase password
+    // ----------------------------------------------------------
+
+    await admin
+      .auth()
+      .updateUser(firebaseUser.uid, {
+        password: newPassword
+      });
+
+    // ----------------------------------------------------------
+    // Mark token as used
+    // ----------------------------------------------------------
+
+    await tokenRef.update({
+      used: true,
+      usedAt:
+        admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(
+      `PASSWORD RESET SUCCESS: ${email}`
+    );
+
+    return res.json({
+      ok: true,
+      message: "Password changed successfully"
+    });
+
+  } catch (error) {
+
+    console.error(
+      "PASSWORD RESET ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to reset password"
+    });
+  }
+});
+
+
+// ============================================================
 // START SERVER
 // ============================================================
 
