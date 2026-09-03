@@ -4905,7 +4905,7 @@ const otpStore = new Map();
 
 const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_MAX_ATTEMPTS = 5;
-const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 10 * 1000;
 
 // ------------------------------------------------------------
 // GENERATE OTP
@@ -5189,22 +5189,30 @@ app.post(
       const otpHash =
         hashOTP(otp);
 
-      otpStore.set(
-        key,
-        {
-          otpHash,
-          createdAt: Date.now(),
-          expiresAt:
-            Date.now() +
-            OTP_EXPIRY_MS,
-          attempts: 0
-        }
-      );
+      // ------------------------------------------------------
+      // IMPORTANT:
+      // FIRST SEND EMAIL
+      // THEN START 5-MINUTE OTP TIMER
+      // ------------------------------------------------------
 
       await sendOTPEmail(
         email,
         otp,
         purpose
+      );
+
+      const createdAt =
+        Date.now();
+
+      otpStore.set(
+        key,
+        {
+          otpHash,
+          createdAt,
+          expiresAt:
+            createdAt + OTP_EXPIRY_MS,
+          attempts: 0
+        }
       );
 
       console.log(
