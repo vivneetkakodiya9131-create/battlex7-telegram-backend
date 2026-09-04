@@ -6200,6 +6200,17 @@ initDatabase()
       "Smart Sunday Memory initialization complete"
     );
 
+    // --------------------------------------------------------
+// BIRTHDAY SYSTEM INITIALIZATION
+// --------------------------------------------------------
+
+await runBirthdayCheck();
+scheduleBirthdayCheck();
+
+console.log(
+  "🎂 Birthday system initialized successfully."
+);
+    
   })
   .catch((error) => {
 
@@ -6221,25 +6232,3 @@ app.listen(
 
   }
 );
-
-// --------------------------------------------------------
-    // 🎂 BIRTHDAY SYSTEM INITIALIZATION
-    // --------------------------------------------------------
-
-    await runBirthdayCheck();
-
-    scheduleBirthdayCheck();
-
-    console.log(
-      "🎂 Birthday system initialized successfully."
-    );
-
-  })
-  .catch((error) => {
-
-    console.error(
-      "Database initialization failed:",
-      error
-    );
-
-  });
