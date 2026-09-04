@@ -3,6 +3,12 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const admin = require("firebase-admin");
 
+const OpenAI = require("openai");
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 const app = express();
 
 app.use(cors());
