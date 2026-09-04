@@ -6188,52 +6188,108 @@ app.post("/auth/password/reset", async (req, res) => {
 // AI ARENA CHAT API
 // ============================================================
 
-app.post(
-  "/api/ai/chat",
-  async (req, res) => {
+app.post("/api/ai/chat", async (req, res) => {
+  try {
 
-    try {
+    // User must be logged in with Firebase
+    const decoded = await requireFirebaseUser(req, res);
 
-      // User must be logged in with Firebase
-      const decoded = await requireFirebaseUser(req, res);
+    if (!decoded) return;
 
-      if (!decoded) return;
+    const message =
+      String(req.body?.message || "").trim();
 
-      const message =
-        String(req.body?.message || "").trim();
-
-      if (!message) {
-        return res.status(400).json({
-          ok: false,
-          error: "Message is required"
-        });
-      }
-
-      // STEP 1 TEST RESPONSE
-      // Actual AI will be connected in a later step.
-      res.json({
-        ok: true,
-        userId: decoded.uid,
-        message,
-        reply: "AI Arena backend connection successful."
-      });
-
-    } catch (error) {
-
-      console.error(
-        "AI Arena error:",
-        error
-      );
-
-      res.status(500).json({
+    if (!message) {
+      return res.status(400).json({
         ok: false,
-        error: "AI Arena request failed"
+        error: "Message is required"
       });
-
     }
 
+    // Optional conversation history from the app
+    const history = Array.isArray(req.body?.history)
+      ? req.body.history.slice(-10)
+      : [];
+
+    const safeHistory = history
+      .filter(item =>
+        item &&
+        typeof item.role === "string" &&
+        typeof item.content === "string"
+      )
+      .map(item => ({
+        role: item.role === "assistant"
+          ? "assistant"
+          : "user",
+        content: item.content.slice(0, 4000)
+      }));
+
+    const instructions = `
+You are AI ARENA, the official AI assistant for BATTLE X7 ARENA.
+
+Your job is to help logged-in tournament users with:
+- Tournament information
+- Match guidance
+- Wallet guidance
+- Account guidance
+- Support questions
+- General BATTLE X7 ARENA help
+
+Important rules:
+1. Never invent tournament, match, wallet, reward, withdrawal or leaderboard data.
+2. If real BATTLE X7 ARENA data is not provided to you, clearly say that you need to check the system.
+3. Never claim that a payment, withdrawal, tournament result or reward was changed or approved.
+4. Be concise, friendly and helpful.
+5. Reply in the same language/style as the user whenever possible.
+6. Do not reveal private backend information, database details, API keys or internal security information.
+7. The logged-in user's Firebase UID is internal context and must not be exposed unless specifically required by the application.
+
+Logged-in user Firebase UID:
+${decoded.uid}
+`;
+
+    const input = [
+      {
+        role: "developer",
+        content: instructions
+      },
+      ...safeHistory,
+      {
+        role: "user",
+        content: message
+      }
+    ];
+
+    const response = await openai.responses.create({
+      model: process.env.AI_ARENA_MODEL || "gpt-5.6-luna",
+      input
+    });
+
+    const reply =
+      String(response.output_text || "").trim();
+
+    if (!reply) {
+      return res.status(502).json({
+        ok: false,
+        error: "AI returned an empty response"
+      });
+    }
+
+    res.json({
+      ok: true,
+      reply
+    });
+
+  } catch (error) {
+
+    console.error("AI Arena error:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: "AI Arena request failed"
+    });
   }
-);
+});
 
 
 // ============================================================
