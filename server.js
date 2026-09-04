@@ -6178,6 +6178,57 @@ app.post("/auth/password/reset", async (req, res) => {
   }
 });
 
+// ============================================================
+// AI ARENA CHAT API
+// ============================================================
+
+app.post(
+  "/api/ai/chat",
+  async (req, res) => {
+
+    try {
+
+      // User must be logged in with Firebase
+      const decoded = await requireFirebaseUser(req, res);
+
+      if (!decoded) return;
+
+      const message =
+        String(req.body?.message || "").trim();
+
+      if (!message) {
+        return res.status(400).json({
+          ok: false,
+          error: "Message is required"
+        });
+      }
+
+      // STEP 1 TEST RESPONSE
+      // Actual AI will be connected in a later step.
+      res.json({
+        ok: true,
+        userId: decoded.uid,
+        message,
+        reply: "AI Arena backend connection successful."
+      });
+
+    } catch (error) {
+
+      console.error(
+        "AI Arena error:",
+        error
+      );
+
+      res.status(500).json({
+        ok: false,
+        error: "AI Arena request failed"
+      });
+
+    }
+
+  }
+);
+
 
 // ============================================================
 // START SERVER
