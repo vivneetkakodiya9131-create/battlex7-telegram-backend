@@ -254,6 +254,513 @@ async function requireFirebaseUser(req, res) {
 
 
 // ============================================================
+// 🎂 BATTLE X7 ARENA — BIRTHDAY SYSTEM
+// ============================================================
+
+const BIRTHDAY_SETTINGS_PATH = "settings/birthday";
+const BIRTHDAY_TIMEZONE = "Asia/Kolkata";
+
+
+// ------------------------------------------------------------
+// CALCULATE AGE
+// ------------------------------------------------------------
+
+function birthdayCalculateAge(dob) {
+
+  if (!dob) return null;
+
+  const birthDate =
+    new Date(`${dob}T00:00:00`);
+
+  if (
+    Number.isNaN(
+      birthDate.getTime()
+    )
+  ) {
+    return null;
+  }
+
+  const today = new Date();
+
+  let age =
+    today.getFullYear() -
+    birthDate.getFullYear();
+
+  const monthDifference =
+    today.getMonth() -
+    birthDate.getMonth();
+
+  if (
+    monthDifference < 0 ||
+    (
+      monthDifference === 0 &&
+      today.getDate() <
+        birthDate.getDate()
+    )
+  ) {
+    age--;
+  }
+
+  return age;
+}
+
+
+// ------------------------------------------------------------
+// CHECK BIRTHDAY
+// ------------------------------------------------------------
+
+function birthdayIsToday(dob) {
+
+  if (!dob) return false;
+
+  const birthDate =
+    new Date(`${dob}T00:00:00`);
+
+  if (
+    Number.isNaN(
+      birthDate.getTime()
+    )
+  ) {
+    return false;
+  }
+
+  const today = new Date();
+
+  return (
+    birthDate.getMonth() ===
+      today.getMonth() &&
+    birthDate.getDate() ===
+      today.getDate()
+  );
+}
+
+
+// ------------------------------------------------------------
+// CURRENT YEAR
+// ------------------------------------------------------------
+
+function birthdayCurrentYear() {
+
+  return new Date()
+    .getFullYear();
+
+}
+
+
+// ------------------------------------------------------------
+// DEFAULT SETTINGS
+// ------------------------------------------------------------
+
+function birthdayDefaultSettings() {
+
+  return {
+
+    birthdayWishes: true,
+
+    automaticNotification: true,
+
+    birthdayBonus: false,
+
+    bonusAmount: 0,
+
+    customMessage:
+      "🎉 Happy Birthday! BATTLE X7 ARENA ki taraf se aapko bahut-bahut shubhkamnayein! 🎂"
+
+  };
+
+}
+
+
+// ------------------------------------------------------------
+// GET ADMIN BIRTHDAY SETTINGS
+// ------------------------------------------------------------
+
+async function getBirthdaySettings() {
+
+  const defaults =
+    birthdayDefaultSettings();
+
+  if (!firebaseReady) {
+    return defaults;
+  }
+
+  try {
+
+    const snap =
+      await firestore
+        .doc(BIRTHDAY_SETTINGS_PATH)
+        .get();
+
+    if (!snap.exists) {
+      return defaults;
+    }
+
+    return {
+      ...defaults,
+      ...(snap.data() || {})
+    };
+
+  } catch (error) {
+
+    console.error(
+      "BIRTHDAY SETTINGS ERROR:",
+      error
+    );
+
+    return defaults;
+  }
+}
+
+
+// ------------------------------------------------------------
+// CREATE IN-APP NOTIFICATION
+// ------------------------------------------------------------
+
+async function createBirthdayNotification(
+  userId,
+  user,
+  message
+) {
+
+  if (!firebaseReady) {
+    return;
+  }
+
+  const notificationRef =
+    firestore
+      .collection("users")
+      .doc(userId)
+      .collection("notifications")
+      .doc();
+
+  await notificationRef.set({
+
+    type: "birthday",
+
+    title:
+      "🎂 Happy Birthday!",
+
+    message:
+
+      message ||
+      "🎉 Happy Birthday! BATTLE X7 ARENA ki taraf se aapko bahut-bahut shubhkamnayein! 🎂",
+
+    read: false,
+
+    createdAt:
+      admin.firestore.FieldValue.serverTimestamp(),
+
+    userId:
+
+      userId,
+
+    birthdayYear:
+      birthdayCurrentYear(),
+
+    username:
+      String(
+        user.username ||
+        user.displayName ||
+        ""
+      ).trim()
+
+  });
+
+}
+
+
+// ------------------------------------------------------------
+// PROCESS ONE USER
+// ------------------------------------------------------------
+
+async function processBirthdayUser(
+  userId,
+  user,
+  settings
+) {
+
+  if (!user || !user.dob) {
+    return {
+      birthday: false,
+      rewarded: false
+    };
+  }
+
+  if (!birthdayIsToday(user.dob)) {
+
+    return {
+      birthday: false,
+      rewarded: false
+    };
+
+  }
+
+  const year =
+    birthdayCurrentYear();
+
+  let rewarded = false;
+
+  // ----------------------------------------------------------
+  // BIRTHDAY WISH
+  // ----------------------------------------------------------
+
+  if (
+    settings.birthdayWishes !== false &&
+    settings.automaticNotification !== false
+  ) {
+
+    const message =
+      String(
+        settings.customMessage ||
+        birthdayDefaultSettings()
+          .customMessage
+      ).trim();
+
+    await createBirthdayNotification(
+      userId,
+      user,
+      message
+    );
+
+  }
+
+  // ----------------------------------------------------------
+  // BIRTHDAY BONUS
+  // ----------------------------------------------------------
+
+  if (
+    settings.birthdayBonus === true
+  ) {
+
+    const bonus =
+      Number(
+        settings.bonusAmount || 0
+      );
+
+    if (
+      Number.isFinite(bonus) &&
+      bonus > 0
+    ) {
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(userId);
+
+      await firestore.runTransaction(
+        async (transaction) => {
+
+          const snap =
+            await transaction.get(
+              userRef
+            );
+
+          if (!snap.exists) {
+            return;
+          }
+
+          const currentUser =
+            snap.data() || {};
+
+          // Already received this year
+          if (
+            Number(
+              currentUser
+                .birthdayBonusReceivedYear ||
+              0
+            ) === year
+          ) {
+
+            return;
+          }
+
+          const currentBalance =
+            Number(
+              currentUser.walletBalance ||
+              0
+            );
+
+          const newBalance =
+            currentBalance + bonus;
+
+          transaction.update(
+            userRef,
+            {
+
+              walletBalance:
+                newBalance,
+
+              birthdayBonusReceivedYear:
+                year,
+
+              updatedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+
+            }
+          );
+
+          rewarded = true;
+
+        }
+      );
+
+      // --------------------------------------------------------
+      // BONUS NOTIFICATION
+      // --------------------------------------------------------
+
+      if (rewarded) {
+
+        await createBirthdayNotification(
+          userId,
+          user,
+          `🎁 Birthday Bonus ₹${bonus} aapke wallet mein add kar diya gaya hai. 🎉`
+        );
+
+      }
+
+    }
+
+  }
+
+  return {
+    birthday: true,
+    rewarded
+  };
+
+}
+
+
+// ------------------------------------------------------------
+// RUN BIRTHDAY CHECK
+// ------------------------------------------------------------
+
+async function runBirthdayCheck() {
+
+  if (!firebaseReady) {
+
+    console.log(
+      "🎂 Birthday system skipped: Firebase not ready."
+    );
+
+    return;
+
+  }
+
+  try {
+
+    const settings =
+      await getBirthdaySettings();
+
+    const usersSnap =
+      await firestore
+        .collection("users")
+        .get();
+
+    let birthdayCount = 0;
+
+    let rewardedCount = 0;
+
+    for (
+      const doc of usersSnap.docs
+    ) {
+
+      const userId =
+        doc.id;
+
+      const user =
+        doc.data() || {};
+
+      const result =
+        await processBirthdayUser(
+          userId,
+          user,
+          settings
+        );
+
+      if (result.birthday) {
+
+        birthdayCount++;
+
+      }
+
+      if (result.rewarded) {
+
+        rewardedCount++;
+
+      }
+
+    }
+
+    console.log(
+      `🎂 Birthday check completed. Birthdays: ${birthdayCount}, Bonuses: ${rewardedCount}`
+    );
+
+  } catch (error) {
+
+    console.error(
+      "🎂 BIRTHDAY CHECK ERROR:",
+      error
+    );
+
+  }
+
+}
+
+
+// ------------------------------------------------------------
+// SCHEDULE NEXT INDIA-MIDNIGHT CHECK
+// ------------------------------------------------------------
+
+function scheduleBirthdayCheck() {
+
+  const now =
+    new Date();
+
+  const next =
+    new Date();
+
+  next.setHours(
+    0,
+    5,
+    0,
+    0
+  );
+
+  if (
+    next <= now
+  ) {
+
+    next.setDate(
+      next.getDate() + 1
+    );
+
+  }
+
+  const delay =
+    next.getTime() -
+    now.getTime();
+
+  console.log(
+    `🎂 Next birthday check scheduled for ${next.toString()}`
+  );
+
+  setTimeout(
+    async () => {
+
+      await runBirthdayCheck();
+
+      scheduleBirthdayCheck();
+
+    },
+    delay
+  );
+
+}
+
+
+// ============================================================
 // DATABASE INITIALIZATION
 // ============================================================
 
@@ -5714,3 +6221,25 @@ app.listen(
 
   }
 );
+
+// --------------------------------------------------------
+    // 🎂 BIRTHDAY SYSTEM INITIALIZATION
+    // --------------------------------------------------------
+
+    await runBirthdayCheck();
+
+    scheduleBirthdayCheck();
+
+    console.log(
+      "🎂 Birthday system initialized successfully."
+    );
+
+  })
+  .catch((error) => {
+
+    console.error(
+      "Database initialization failed:",
+      error
+    );
+
+  });
