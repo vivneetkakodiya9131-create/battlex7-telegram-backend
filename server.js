@@ -6222,6 +6222,12 @@ const freeFireUid =
 const walletBalance =
   Number(userProfile.walletBalance || 0);
 
+    const mobile =
+    String(userProfile.mobile || userProfile.phone || "").trim();
+
+const email =
+    String(userProfile.email || "").trim();
+
 // ----------------------------------------------------------
 // LOAD RECENT WALLET TRANSACTIONS FOR AI ARENA
 // ----------------------------------------------------------
@@ -6829,21 +6835,39 @@ if (asksForTicket) {
     );
 
     const supportMessage = `
-🎫 NEW AI ARENA SUPPORT TICKET
+🎫 NEW SUPPORT TICKET
 
+━━━━━━━━━━━━━━━━━━
 🆔 Ticket ID: ${ticketId}
 
 👤 USER DETAILS
+
+UID: ${decoded.uid}
 Free Fire Name: ${freeFireName || "N/A"}
 Username: ${username || "N/A"}
+Mobile: ${mobile || "N/A"}
+Email: ${email || "N/A"}
 
-📋 PROBLEM
+━━━━━━━━━━━━━━━━━━
+📋 TICKET DETAILS
+
+Category: AI ARENA
+Tournament ID: N/A
+
+Problem:
 ${message.slice(0, 3500)}
 
-📎 Expected Proof: ${proofType}
+Description:
+AI Arena support request
 
-🤖 Source: AI ARENA
-🔐 Authenticated user ticket.
+━━━━━━━━━━━━━━━━━━
+${proofType === "video"
+  ? "🎥 Required Proof: VIDEO"
+  : "📸 Required Proof: SCREENSHOT"}
+
+The user will be asked for this proof in Telegram.
+
+⚡ BATTLE X7 ARENA SUPPORT
 `;
 
     const telegramResult = await telegram(
