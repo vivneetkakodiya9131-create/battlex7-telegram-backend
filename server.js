@@ -6223,6 +6223,68 @@ const walletBalance =
   Number(userProfile.walletBalance || 0);
 
 // ----------------------------------------------------------
+// LOAD USER DEPOSITS + WITHDRAWALS FOR AI ARENA
+// ----------------------------------------------------------
+let aiDeposits = [];
+let aiWithdrawals = [];
+
+try {
+  // -------------------------
+  // DEPOSIT HISTORY
+  // -------------------------
+  const depositSnap = await firestore
+    .collection("depositRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(50)
+    .get();
+
+  depositSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    aiDeposits.push({
+      amount: Number(data.amount || 0),
+      status: String(data.status || "pending"),
+      date: String(data.createdAt || ""),
+    });
+  });
+
+  // -------------------------
+  // WITHDRAWAL HISTORY
+  // -------------------------
+  const withdrawSnap = await firestore
+    .collection("withdrawRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(50)
+    .get();
+
+  withdrawSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    aiWithdrawals.push({
+      amount: Number(data.amount || 0),
+      status: String(data.status || "pending"),
+      date: String(data.createdAt || ""),
+    });
+  });
+
+  console.log(
+    "AI ARENA DEPOSIT COUNT:",
+    aiDeposits.length
+  );
+
+  console.log(
+    "AI ARENA WITHDRAWAL COUNT:",
+    aiWithdrawals.length
+  );
+
+} catch (walletHistoryError) {
+  console.warn(
+    "AI Arena deposit/withdrawal lookup failed:",
+    walletHistoryError
+  );
+}
+    
+// ----------------------------------------------------------
 // LOAD USER TOURNAMENT EARNINGS FOR AI ARENA
 // ----------------------------------------------------------
 let tournamentEarnings = [];
@@ -6533,6 +6595,34 @@ Username: ${username || "Not available"}
 Free Fire Name: ${freeFireName || "Not available"}
 Free Fire UID: ${freeFireUid || "Not available"}
 Current Wallet Balance: ₹${walletBalance.toFixed(2)}
+
+Current Deposit History:
+${JSON.stringify(aiDeposits)}
+
+Current Withdrawal History:
+${JSON.stringify(aiWithdrawals)}
+
+Use this information when the user asks about:
+- their deposits
+- their withdrawals
+- withdrawal status
+- deposit status
+- deposit amount
+- withdrawal amount
+- recent wallet transactions
+
+Only use the actual data provided by the backend.
+Never invent a deposit, withdrawal, amount or status.
+
+If there are no deposits, clearly say that
+no deposit record is currently available.
+
+If there are no withdrawals, clearly say that
+no withdrawal record is currently available.
+
+Never reveal internal document IDs.
+Never reveal UPI IDs or UTR numbers.
+
 Current Tournament Earning: ₹${totalEarning.toFixed(2)}
 
 Current Tournament Earning Details:
