@@ -6566,6 +6566,90 @@ try {
     joinedError
   );
 }
+
+    // ----------------------------------------------------------
+// LOAD LOGGED-IN USER REFERRAL DATA FOR AI ARENA
+// ----------------------------------------------------------
+let aiReferralData = [];
+let aiReferralSummary = {
+  totalReferrals: 0,
+  completedReferrals: 0,
+  pendingReferrals: 0,
+  totalBonusEarned: 0,
+  history: []
+};
+
+try {
+  const referralSnap = await firestore
+    .collection("referralHistory")
+    .where("referrerId", "==", decoded.uid)
+    .limit(200)
+    .get();
+
+  referralSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    const status = String(data.status || "pending").toLowerCase();
+
+    const bonus = Number(data.bonusEarned || 0);
+
+    aiReferralData.push({
+      referredUsername: String(
+        data.referredUsername || "User"
+      ),
+      signupDate: data.signupDate?.toDate
+        ? data.signupDate.toDate().toISOString()
+        : String(data.signupDate || ""),
+      status,
+      matchesCompleted: Number(
+        data.matchesCompleted || 0
+      ),
+      requiredMatches: Number(
+        data.requiredMatches || 2
+      ),
+      rewardAmount: Number(
+        data.rewardAmount || 10
+      ),
+      bonusEarned: Number.isFinite(bonus)
+        ? bonus
+        : 0,
+      rewardCredited:
+        data.rewardCredited === true
+    });
+  });
+
+  aiReferralSummary.totalReferrals =
+    aiReferralData.length;
+
+  aiReferralSummary.completedReferrals =
+    aiReferralData.filter(
+      (x) =>
+        x.status === "completed" ||
+        x.rewardCredited === true
+    ).length;
+
+  aiReferralSummary.pendingReferrals = Math.max(
+    0,
+    aiReferralSummary.totalReferrals -
+      aiReferralSummary.completedReferrals
+  );
+
+  aiReferralSummary.totalBonusEarned =
+    aiReferralData.reduce(
+      (sum, x) =>
+        sum + (Number(x.bonusEarned) || 0),
+      0
+    );
+
+  aiReferralSummary.history =
+    aiReferralData;
+
+} catch (referralError) {
+  console.error(
+    "AI referral data load error:",
+    referralError
+  );
+}
     
 // ----------------------------------------------------------
 // LOAD LIVE TOURNAMENT DATA FOR AI ARENA
@@ -6583,7 +6667,6 @@ try {
     const data = doc.data() || {};
 
     liveTournaments.push({
-      id: doc.id,
       title: String(data.title || data.name || ""),
       category: String(
         data.category ||
@@ -6696,6 +6779,116 @@ const message =
         content: item.content.slice(0, 4000)
       }));
 
+    // ----------------------------------------------------------
+// AI ARENA SUPPORT TICKET CREATION
+// ----------------------------------------------------------
+const normalizedMessage = message.toLowerCase();
+
+const explicitTicketRequest =
+  /\b(ticket|support ticket|complaint|complain)\b/.test(
+    normalizedMessage
+  ) &&
+  /(create|open|raise|make|bana|banado|bana do|kar do|kardo|register|submit|file)/.test(
+    normalizedMessage
+  );
+
+const previousAssistantOfferedTicket =
+  safeHistory.some((item) =>
+    item.role === "assistant" &&
+    /(ticket|support).*(bana|create|open|raise|kar)/i.test(
+      String(item.content || "")
+    )
+  );
+
+const confirmsTicket =
+  /^(haan|ha|yes|yep|ok|okay|kar do|bana do|create kar do|open kar do|please do)\b/i.test(
+    message
+  );
+
+const asksForTicket =
+  explicitTicketRequest ||
+  (previousAssistantOfferedTicket && confirmsTicket);
+
+if (asksForTicket) {
+  if (!BOT_TOKEN || !CHAT_ID) {
+    return res.json({
+      ok: true,
+      reply:
+        "Bhai, support ticket system abhi available nahi hai. Thodi der baad try karo."
+    });
+  }
+
+  try {
+    const ticketId =
+      `AI-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+
+    const proofType = getProofType(
+      "AI ARENA",
+      "AI Arena support request",
+      message
+    );
+
+    const supportMessage = `
+🎫 NEW AI ARENA SUPPORT TICKET
+
+🆔 Ticket ID: ${ticketId}
+
+👤 USER DETAILS
+Free Fire Name: ${freeFireName || "N/A"}
+Username: ${username || "N/A"}
+
+📋 PROBLEM
+${message.slice(0, 3500)}
+
+📎 Expected Proof: ${proofType}
+
+🤖 Source: AI ARENA
+🔐 Authenticated user ticket.
+`;
+
+    const telegramResult = await telegram(
+      "sendMessage",
+      {
+        chat_id: CHAT_ID,
+        text: supportMessage
+      }
+    );
+
+    if (!telegramResult?.ok) {
+      throw new Error(
+        telegramResult?.description ||
+        "Telegram ticket send failed"
+      );
+    }
+
+    const prefix =
+      proofType === "video" ? "v_" : "p_";
+
+    const telegramUrl =
+      `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
+
+    return res.json({
+      ok: true,
+      reply:
+        `✅ Support ticket create ho gaya.\n\n` +
+        `🎫 Ticket ID: #${ticketId}\n\n` +
+        `Aapki problem support team ko bhej di gayi hai.\n\n` +
+        `Open Ticket in Telegram: ${telegramUrl}`
+    });
+
+  } catch (ticketError) {
+    console.error(
+      "AI Arena support ticket error:",
+      ticketError
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Support ticket create nahi ho saka."
+    });
+  }
+}
+
     const instructions = `
 You are AI ARENA, the official AI assistant for BATTLE X7 ARENA.
 
@@ -6708,13 +6901,19 @@ Your job is to help logged-in tournament users with:
 - General BATTLE X7 ARENA help
 
 Important rules:
-1. Never invent tournament, match, wallet, reward, withdrawal or leaderboard data.
-2. If real BATTLE X7 ARENA data is not provided to you, clearly say that you need to check the system.
-3. Never claim that a payment, withdrawal, tournament result or reward was changed or approved.
-4. Be concise, friendly and helpful.
-5. Reply in the same language/style as the user whenever possible.
-6. Do not reveal private backend information, database details, API keys or internal security information.
-7. The logged-in user's Firebase UID is internal context and must not be exposed unless specifically required by the application.
+1. Never invent tournament, match, wallet, earning, withdrawal, referral or leaderboard data.
+2. Always use the real backend data provided in the current context.
+3. Never claim that a payment, withdrawal, tournament result, earning or reward was changed, approved or credited unless the backend data explicitly confirms it.
+4. The AI Arena is READ-ONLY. It cannot directly modify wallet balance, withdrawals, tournament results, rewards, referrals or account data.
+5. Be concise, friendly and helpful.
+6. Reply in the same language/style as the user whenever possible.
+7. Never reveal private backend information, database details, API keys, Firebase UID, Firestore document IDs, UPI IDs, UTRs or other internal identifiers.
+8. Never reveal another user's private information.
+9. Referral information must be based only on the authenticated user's referral data supplied by the backend.
+10. Tournament information must be based only on the live tournament data supplied by the backend.
+11. Result information contains EARNING/REWARD only. Never mention or invent Kills, Wins, Skills, Matches or other performance statistics.
+12. If the user reports a support problem, explain the available help clearly. Do not claim a support ticket was created unless the backend has actually created it.
+13. A support ticket may be created only when the user explicitly asks for one or confirms after the AI offers to create one.
 
 Logged-in user profile:
 Username: ${username || "Not available"}
@@ -6793,8 +6992,44 @@ Result information is EARNING ONLY.
 Current Joined Tournament Data:
 ${JSON.stringify(joinedTournaments)}
 
+Current Referral Data:
+${JSON.stringify(aiReferralSummary)}
+
+Referral History:
+${JSON.stringify(aiReferralData)}
+
+Use this data when the user asks about:
+- total referrals
+- completed referrals
+- pending referrals
+- referral bonus
+- referral reward
+- referred users
+- referral progress
+- how many matches a referred user has completed
+
+Only use the referral data provided by the backend.
+Never invent referral numbers, rewards, users or progress.
+
+Do not reveal:
+- Firebase UID
+- referred user's email
+- referred user's Free Fire UID
+- internal Firestore document IDs
+- database IDs or backend secrets.
+
 Current Available Tournament Data:
 ${JSON.stringify(liveTournaments)}
+
+Use this data when the user asks about currently
+available tournaments, tournament entry fee, prize pool,
+slots, filled slots, category, map, date or time.
+
+Only report tournaments actually provided by the backend.
+Never invent a tournament or tournament details.
+If the list is empty, clearly say that no tournament is
+currently available.
+Never reveal internal Firestore tournament document IDs.
 
 Use this live tournament data when the user asks about
 available tournaments, match categories, entry fees,
