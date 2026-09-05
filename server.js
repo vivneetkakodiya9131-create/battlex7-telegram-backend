@@ -6793,6 +6793,19 @@ Result information is EARNING ONLY.
 Current Joined Tournament Data:
 ${JSON.stringify(joinedTournaments)}
 
+Current Available Tournament Data:
+${JSON.stringify(liveTournaments)}
+
+Use this live tournament data when the user asks about
+available tournaments, match categories, entry fees,
+prize pools, slots, status, map, date or time.
+
+Never invent tournament information.
+If the tournament data is empty, clearly say that
+no live tournament information is currently available.
+
+Never reveal internal tournament document IDs.
+
 Use this data when the user asks about
 tournaments they have personally joined,
 their joined match, joined tournament date,
