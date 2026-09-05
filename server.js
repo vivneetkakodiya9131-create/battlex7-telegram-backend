@@ -6194,11 +6194,34 @@ app.post("/api/ai/chat", async (req, res) => {
     // User must be logged in with Firebase
     const decoded = await requireFirebaseUser(req, res);
 
-    if (!decoded) return;
+if (!decoded) return;
 
-    const message =
-      String(req.body?.message || "").trim();
 
+// ----------------------------------------------------------
+// LOAD LOGGED-IN USER PROFILE FROM FIRESTORE
+// ----------------------------------------------------------
+const userRef = firestore
+    .collection("users")
+    .doc(decoded.uid);
+
+const userSnap = await userRef.get();
+
+const userProfile = userSnap.exists
+    ? userSnap.data()
+    : {};
+
+const username =
+    String(userProfile.username || "").trim();
+
+const freeFireName =
+    String(userProfile.freeFireName || "").trim();
+
+const freeFireUid =
+    String(userProfile.freeFireUid || "").trim();
+
+
+const message =
+    String(req.body?.message || "").trim();
     if (!message) {
       return res.status(400).json({
         ok: false,
@@ -6244,8 +6267,14 @@ Important rules:
 6. Do not reveal private backend information, database details, API keys or internal security information.
 7. The logged-in user's Firebase UID is internal context and must not be exposed unless specifically required by the application.
 
-Logged-in user Firebase UID:
-${decoded.uid}
+Logged-in user profile:
+Username: ${username || "Not available"}
+Free Fire Name: ${freeFireName || "Not available"}
+Free Fire UID: ${freeFireUid || "Not available"}
+
+You may use this profile information when the user asks about their own account, Free Fire name or Free Fire UID.
+
+Never reveal the internal Firebase UID.
 `;
 
     const input = [
