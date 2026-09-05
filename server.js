@@ -6825,13 +6825,86 @@ if (asksForTicket) {
   }
 
   try {
+    // Get the latest profile data before creating the ticket.
+    let currentFreeFireUid = freeFireUid;
+    let currentFreeFireName = freeFireName;
+    let currentUsername = username;
+    let currentMobile = mobile;
+    let currentEmail = email;
+
+    try {
+      const latestUserSnap = await firestore
+        .collection("users")
+        .doc(decoded.uid)
+        .get();
+
+      if (latestUserSnap.exists) {
+        const latestUser = latestUserSnap.data() || {};
+
+        currentFreeFireUid = String(
+          latestUser.freeFireUid ??
+          latestUser.freefireUid ??
+          latestUser.uid ??
+          currentFreeFireUid ??
+          ""
+        );
+
+        currentFreeFireName = String(
+          latestUser.freeFireName ??
+          latestUser.freefireName ??
+          currentFreeFireName ??
+          ""
+        );
+
+        currentUsername = String(
+          latestUser.username ??
+          latestUser.name ??
+          currentUsername ??
+          ""
+        );
+
+        currentMobile = String(
+          latestUser.mobile ??
+          latestUser.phone ??
+          currentMobile ??
+          ""
+        );
+
+        currentEmail = String(
+          latestUser.email ??
+          currentEmail ??
+          ""
+        );
+      }
+    } catch (profileRefreshError) {
+      console.error(
+        "AI Arena latest profile refresh error:",
+        profileRefreshError
+      );
+    }
+
+    // Understand the actual problem from the complete user conversation.
+    const aiSupportSummary =
+      await generateAISupportSummary(
+        safeHistory,
+        message
+      );
+
+    const problemSummary =
+      aiSupportSummary.problemSummary ||
+      "Support issue reported";
+
+    const description =
+      aiSupportSummary.description ||
+      "User has reported a support issue through AI Arena. The support team is requested to review and assist the user.";
+
     const ticketId =
       `AI-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
     const proofType = getProofType(
       "AI ARENA",
-      "AI Arena support request",
-      message
+      problemSummary,
+      description
     );
 
     const supportMessage = `
@@ -6842,11 +6915,11 @@ if (asksForTicket) {
 
 👤 USER DETAILS
 
-UID: ${decoded.uid}
-Free Fire Name: ${freeFireName || "N/A"}
-Username: ${username || "N/A"}
-Mobile: ${mobile || "N/A"}
-Email: ${email || "N/A"}
+UID: ${currentFreeFireUid || "N/A"}
+Free Fire Name: ${currentFreeFireName || "N/A"}
+Username: ${currentUsername || "N/A"}
+Mobile: ${currentMobile || "N/A"}
+Email: ${currentEmail || "N/A"}
 
 ━━━━━━━━━━━━━━━━━━
 📋 TICKET DETAILS
@@ -6855,10 +6928,10 @@ Category: AI ARENA
 Tournament ID: N/A
 
 Problem:
-${message.slice(0, 3500)}
+${problemSummary}
 
 Description:
-AI Arena support request
+${description}
 
 ━━━━━━━━━━━━━━━━━━
 ${proofType === "video"
@@ -6910,6 +6983,127 @@ The user will be asked for this proof in Telegram.
       ok: false,
       error: "Support ticket create nahi ho saka."
     });
+  }
+}
+
+  
+    // ==========================================================
+// AI SUPPORT TICKET — INTELLIGENT PROBLEM + DESCRIPTION
+// ==========================================================
+
+async function generateAISupportSummary(conversationHistory, currentMessage) {
+  try {
+    const userConversation = [
+      ...conversationHistory
+        .filter(item => item.role === "user")
+        .map(item => String(item.content || "").trim())
+        .filter(Boolean),
+      String(currentMessage || "").trim()
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    if (!userConversation) {
+      return {
+        problemSummary: "Support issue reported",
+        description:
+          "User has reported a support issue through AI Arena. The support team is requested to review and assist the user."
+      };
+    }
+
+    const summaryResponse = await openai.responses.create({
+      model: process.env.AI_ARENA_MODEL || "gpt-5.6-luna",
+
+      input: [
+        {
+          role: "developer",
+          content: `
+You are the BATTLE X7 ARENA support-ticket summarizer.
+
+Your job is ONLY to understand the user's actual support problem from the conversation and create a professional ticket summary.
+
+Return ONLY valid JSON in this exact format:
+
+{
+  "problemSummary": "short professional problem title",
+  "description": "concise professional description"
+}
+
+RULES:
+
+1. Understand the user's ACTUAL problem from the full conversation.
+2. Ignore messages that only ask for a support ticket, such as:
+   - "ticket bana do"
+   - "support ticket bana do"
+   - "haan bana do"
+   - "yes"
+   These are NOT the actual problem.
+3. Use earlier user messages when they contain the actual problem.
+4. If the user gave a short problem, make it professionally worded without inventing facts.
+5. If the user gave detailed information, preserve all relevant details.
+6. Never invent an amount, date, time, transaction ID, UTR, tournament ID, status, reason or any other fact.
+7. Do not assume something happened unless the user actually said it.
+8. Do not mention Firebase UID, database IDs, internal IDs, API keys or secrets.
+9. Do not mention kills, wins, skills or match statistics.
+10. Keep problemSummary short.
+11. Keep description concise and professional.
+12. Write the result in the same language as the user's conversation when practical.
+13. If information is missing, simply leave it out. Do NOT fill gaps by guessing.
+`
+        },
+        {
+          role: "user",
+          content:
+            `USER CONVERSATION:\n${userConversation.slice(0, 12000)}`
+        }
+      ]
+    });
+
+    const raw = String(
+      summaryResponse.output_text || ""
+    ).trim();
+
+    let parsed;
+
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+
+    if (
+      !parsed ||
+      typeof parsed.problemSummary !== "string" ||
+      typeof parsed.description !== "string"
+    ) {
+      return {
+        problemSummary: "Support issue reported",
+        description:
+          "User has reported a support issue through AI Arena. The support team is requested to review and assist the user."
+      };
+    }
+
+    return {
+      problemSummary:
+        parsed.problemSummary.trim().slice(0, 300) ||
+        "Support issue reported",
+
+      description:
+        parsed.description.trim().slice(0, 2000) ||
+        "User has reported a support issue through AI Arena. The support team is requested to review and assist the user."
+    };
+
+  } catch (summaryError) {
+    console.error(
+      "AI support summary generation error:",
+      summaryError
+    );
+
+    return {
+      problemSummary: "Support issue reported",
+      description:
+        "User has reported a support issue through AI Arena. The support team is requested to review and assist the user."
+    };
   }
 }
 
