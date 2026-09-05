@@ -6221,7 +6221,40 @@ const freeFireUid =
 
 const walletBalance =
   Number(userProfile.walletBalance || 0);
-    
+
+    // ----------------------------------------------------------
+    // LOAD LOGGED-IN USER TOURNAMENT EARNING
+    // ----------------------------------------------------------
+    let totalEarning = 0;
+
+    try {
+      const earningSnap = await firestore
+        .collection("joinRequests")
+        .where("userId", "==", decoded.uid)
+        .get();
+
+      earningSnap.forEach((doc) => {
+        const data = doc.data() || {};
+
+        const earning = Number(
+          data.winningsAmount ??
+          data.prizeWon ??
+          data.winningAmount ??
+          data.winnings ??
+          0
+        );
+
+        if (Number.isFinite(earning) && earning > 0) {
+          totalEarning += earning;
+        }
+      });
+    } catch (earningError) {
+      console.warn(
+        "AI Arena earning lookup failed:",
+        earningError
+      );
+    }
+  
 const message =
     String(req.body?.message || "").trim();
     if (!message) {
@@ -6274,6 +6307,7 @@ Username: ${username || "Not available"}
 Free Fire Name: ${freeFireName || "Not available"}
 Free Fire UID: ${freeFireUid || "Not available"}
 Current Wallet Balance: ₹${walletBalance.toFixed(2)}
+Current Tournament Earning: ₹${totalEarning.toFixed(2)}
 
 You may use this profile information when the user asks about their own account, Free Fire name or Free Fire UID.
 
