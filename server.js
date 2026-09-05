@@ -6282,6 +6282,8 @@ try {
       )
     });
   });
+console.log("AI ARENA TOURNAMENT COUNT:", tournamentSnap.size);
+console.log("AI ARENA TOURNAMENT DATA:", liveTournaments);
 } catch (tournamentError) {
   console.warn(
     "AI Arena tournament lookup failed:",
