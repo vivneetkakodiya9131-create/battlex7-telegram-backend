@@ -6219,7 +6219,9 @@ const freeFireName =
 const freeFireUid =
     String(userProfile.freeFireUid || "").trim();
 
-
+const walletBalance =
+  Number(userProfile.walletBalance || 0);
+    
 const message =
     String(req.body?.message || "").trim();
     if (!message) {
@@ -6271,6 +6273,7 @@ Logged-in user profile:
 Username: ${username || "Not available"}
 Free Fire Name: ${freeFireName || "Not available"}
 Free Fire UID: ${freeFireUid || "Not available"}
+Current Wallet Balance: ₹${walletBalance.toFixed(2)}
 
 You may use this profile information when the user asks about their own account, Free Fire name or Free Fire UID.
 
