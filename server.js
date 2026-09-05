@@ -6223,6 +6223,96 @@ const walletBalance =
   Number(userProfile.walletBalance || 0);
 
 // ----------------------------------------------------------
+// LOAD LOGGED-IN USER'S JOINED TOURNAMENTS FOR AI ARENA
+// ----------------------------------------------------------
+let joinedTournaments = [];
+
+try {
+  const joinedSnap = await firestore
+    .collection("joinRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(200)
+    .get();
+
+  joinedSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    const requestStatus = String(
+      data.status || ""
+    ).toLowerCase();
+
+    // Rejected/cancelled joins ko AI data mein include mat karo
+    if (
+      requestStatus === "rejected" ||
+      requestStatus === "cancelled" ||
+      requestStatus === "canceled"
+    ) {
+      return;
+    }
+
+    joinedTournaments.push({
+      tournamentId: String(
+        data.tournamentId ||
+        data.matchId ||
+        ""
+      ),
+
+      title: String(
+        data.tournamentTitle ||
+        data.title ||
+        data.name ||
+        ""
+      ),
+
+      category: String(
+        data.category ||
+        data.matchCategory ||
+        data.type ||
+        ""
+      ),
+
+      entryFee: Number(
+        data.entryFee ??
+        data.entry ??
+        0
+      ),
+
+      status: String(
+        data.status || ""
+      ),
+
+      date: String(
+        data.date ||
+        data.matchDate ||
+        ""
+      ),
+
+      time: String(
+        data.time ||
+        data.matchTime ||
+        ""
+      )
+    });
+  });
+
+  console.log(
+    "AI ARENA JOINED TOURNAMENT COUNT:",
+    joinedTournaments.length
+  );
+
+  console.log(
+    "AI ARENA JOINED TOURNAMENT DATA:",
+    joinedTournaments
+  );
+
+} catch (joinedError) {
+  console.warn(
+    "AI Arena joined tournament lookup failed:",
+    joinedError
+  );
+}
+    
+// ----------------------------------------------------------
 // LOAD LIVE TOURNAMENT DATA FOR AI ARENA
 // ----------------------------------------------------------
 let liveTournaments = [];
@@ -6377,8 +6467,18 @@ Free Fire Name: ${freeFireName || "Not available"}
 Free Fire UID: ${freeFireUid || "Not available"}
 Current Wallet Balance: ₹${walletBalance.toFixed(2)}
 Current Tournament Earning: ₹${totalEarning.toFixed(2)}
-Current Tournament Data:
-${JSON.stringify(liveTournaments)}
+Current Joined Tournament Data:
+${JSON.stringify(joinedTournaments)}
+
+Use this data when the user asks about
+tournaments they have personally joined,
+their joined match, joined tournament date,
+joined tournament time, entry fee or category.
+
+Only use the joined tournament data provided here.
+Never invent joined tournaments.
+
+Never reveal internal tournament document IDs.
 
 Use this live tournament data when the user asks about
 available tournaments, match categories, entry fees,
