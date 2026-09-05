@@ -6223,6 +6223,132 @@ const walletBalance =
   Number(userProfile.walletBalance || 0);
 
 // ----------------------------------------------------------
+// LOAD RECENT WALLET TRANSACTIONS FOR AI ARENA
+// ----------------------------------------------------------
+let recentTransactions = [];
+
+try {
+  // DEPOSITS
+  const recentDepositSnap = await firestore
+    .collection("depositRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(50)
+    .get();
+
+  recentDepositSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    const createdAt = data.createdAt?.toDate
+      ? data.createdAt.toDate().toISOString()
+      : String(data.createdAt || "");
+
+    recentTransactions.push({
+      type: "deposit",
+      amount: Number(data.amount || 0),
+      status: String(data.status || "pending"),
+      date: createdAt
+    });
+  });
+
+  // WITHDRAWALS
+  const recentWithdrawSnap = await firestore
+    .collection("withdrawRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(50)
+    .get();
+
+  recentWithdrawSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    const createdAt = data.createdAt?.toDate
+      ? data.createdAt.toDate().toISOString()
+      : String(data.createdAt || "");
+
+    recentTransactions.push({
+      type: "withdrawal",
+      amount: Number(data.amount || 0),
+      status: String(data.status || "pending"),
+      date: createdAt
+    });
+  });
+
+  // TOURNAMENT JOIN / ENTRY
+  const recentJoinSnap = await firestore
+    .collection("joinRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(50)
+    .get();
+
+  recentJoinSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    const createdAt = data.createdAt?.toDate
+      ? data.createdAt.toDate().toISOString()
+      : String(data.createdAt || "");
+
+    const entryFee = Number(data.entryFee ?? data.entry ?? 0);
+
+    if (entryFee > 0) {
+      recentTransactions.push({
+        type: "tournament_entry",
+        tournament: String(
+          data.tournamentTitle ||
+          data.title ||
+          data.name ||
+          ""
+        ),
+        amount: entryFee,
+        status: String(data.status || ""),
+        date: createdAt
+      });
+    }
+
+    // EARNING ONLY
+    const earning = Number(
+      data.winningsAmount ??
+      data.prizeWon ??
+      data.winningAmount ??
+      data.winnings ??
+      0
+    );
+
+    if (earning > 0) {
+      recentTransactions.push({
+        type: "earning",
+        tournament: String(
+          data.tournamentTitle ||
+          data.title ||
+          data.name ||
+          ""
+        ),
+        amount: earning,
+        status: "earned",
+        date: createdAt
+      });
+    }
+  });
+
+  // LATEST FIRST
+  recentTransactions.sort((a, b) => {
+    return new Date(b.date).getTime() - new Date(a.date).getTime();
+  });
+
+  // ONLY LATEST 20
+  recentTransactions = recentTransactions.slice(0, 20);
+
+  console.log(
+    "AI ARENA RECENT TRANSACTIONS:",
+    recentTransactions
+  );
+
+} catch (recentTransactionsError) {
+  console.warn(
+    "AI Arena recent transactions lookup failed:",
+    recentTransactionsError
+  );
+}
+    
+// ----------------------------------------------------------
 // LOAD USER DEPOSITS + WITHDRAWALS FOR AI ARENA
 // ----------------------------------------------------------
 let aiDeposits = [];
@@ -6601,6 +6727,28 @@ ${JSON.stringify(aiDeposits)}
 
 Current Withdrawal History:
 ${JSON.stringify(aiWithdrawals)}
+
+Recent Wallet Transactions:
+${JSON.stringify(recentTransactions)}
+
+When the user asks about their recent, latest, previous
+or wallet transactions, use only this data.
+
+Transaction types may include:
+- deposit
+- withdrawal
+- tournament_entry
+- earning
+
+Only report transactions actually provided by the backend.
+Never invent any transaction, amount, status, date or tournament.
+
+IMPORTANT:
+Result/Earning information is EARNING ONLY.
+Do not mention kills, wins, skills or match statistics.
+
+Never reveal internal Firestore document IDs.
+Never reveal UPI IDs or UTR numbers.
 
 Use this information when the user asks about:
 - their deposits
