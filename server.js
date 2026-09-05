@@ -6223,6 +6223,73 @@ const walletBalance =
   Number(userProfile.walletBalance || 0);
 
 // ----------------------------------------------------------
+// LOAD USER TOURNAMENT EARNINGS FOR AI ARENA
+// ----------------------------------------------------------
+let tournamentEarnings = [];
+let totalTournamentEarning = 0;
+
+try {
+  const earningSnap = await firestore
+    .collection("joinRequests")
+    .where("userId", "==", decoded.uid)
+    .limit(200)
+    .get();
+
+  earningSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    const requestStatus =
+      String(data.status || "").toLowerCase();
+
+    if (
+      requestStatus === "rejected" ||
+      requestStatus === "cancelled" ||
+      requestStatus === "canceled"
+    ) {
+      return;
+    }
+
+    const earning = Number(
+      data.winningsAmount ??
+      data.prizeWon ??
+      data.winningAmount ??
+      data.winnings ??
+      0
+    );
+
+    if (earning > 0) {
+      totalTournamentEarning += earning;
+
+      tournamentEarnings.push({
+        title: String(
+          data.tournamentTitle ||
+          data.title ||
+          data.name ||
+          ""
+        ),
+        earning: earning,
+        date: String(
+          data.date ||
+          data.matchDate ||
+          ""
+        )
+      });
+    }
+  });
+
+  console.log(
+    "AI ARENA TOURNAMENT EARNING:",
+    tournamentEarnings
+  );
+
+} catch (earningError) {
+  console.warn(
+    "AI Arena earning lookup failed:",
+    earningError
+  );
+}
+    
+// ----------------------------------------------------------
 // LOAD LOGGED-IN USER'S JOINED TOURNAMENTS FOR AI ARENA
 // ----------------------------------------------------------
 let joinedTournaments = [];
@@ -6467,6 +6534,24 @@ Free Fire Name: ${freeFireName || "Not available"}
 Free Fire UID: ${freeFireUid || "Not available"}
 Current Wallet Balance: ₹${walletBalance.toFixed(2)}
 Current Tournament Earning: ₹${totalEarning.toFixed(2)}
+
+Current Tournament Earning Details:
+${JSON.stringify(tournamentEarnings)}
+
+Total Tournament Earning:
+₹${totalTournamentEarning.toFixed(2)}
+
+Use this information when the user asks about
+their tournament earning, latest earning,
+prize earned or total tournament earning.
+
+Only report earning information provided by the backend.
+Never invent earning amounts.
+
+IMPORTANT:
+Do not mention kills, wins, skills or match statistics.
+Result information is EARNING ONLY.
+
 Current Joined Tournament Data:
 ${JSON.stringify(joinedTournaments)}
 
