@@ -6222,6 +6222,73 @@ const freeFireUid =
 const walletBalance =
   Number(userProfile.walletBalance || 0);
 
+// ----------------------------------------------------------
+// LOAD LIVE TOURNAMENT DATA FOR AI ARENA
+// ----------------------------------------------------------
+let liveTournaments = [];
+
+try {
+  const tournamentSnap = await firestore
+    .collection("tournaments")
+    .orderBy("createdAt", "desc")
+    .limit(100)
+    .get();
+
+  tournamentSnap.forEach((doc) => {
+    const data = doc.data() || {};
+
+    liveTournaments.push({
+      id: doc.id,
+      title: String(data.title || data.name || ""),
+      category: String(
+        data.category ||
+        data.matchCategory ||
+        data.type ||
+        ""
+      ),
+      entryFee: Number(
+        data.entryFee ??
+        data.entry ??
+        0
+      ),
+      prizePool: Number(
+        data.prizePool ??
+        data.prize ??
+        0
+      ),
+      slots: Number(
+        data.slots ??
+        data.totalSlots ??
+        data.maxPlayers ??
+        0
+      ),
+      filledSlots: Number(
+        data.filledSlots ??
+        data.joined ??
+        data.joinedPlayers ??
+        0
+      ),
+      status: String(data.status || ""),
+      map: String(data.map || ""),
+      date: String(
+        data.date ||
+        data.matchDate ||
+        ""
+      ),
+      time: String(
+        data.time ||
+        data.matchTime ||
+        ""
+      )
+    });
+  });
+} catch (tournamentError) {
+  console.warn(
+    "AI Arena tournament lookup failed:",
+    tournamentError
+  );
+}
+    
     // ----------------------------------------------------------
     // LOAD LOGGED-IN USER TOURNAMENT EARNING
     // ----------------------------------------------------------
@@ -6308,6 +6375,18 @@ Free Fire Name: ${freeFireName || "Not available"}
 Free Fire UID: ${freeFireUid || "Not available"}
 Current Wallet Balance: ₹${walletBalance.toFixed(2)}
 Current Tournament Earning: ₹${totalEarning.toFixed(2)}
+Current Tournament Data:
+${JSON.stringify(liveTournaments)}
+
+Use this live tournament data when the user asks about
+available tournaments, match categories, entry fees,
+prize pools, slots, status, map, date or time.
+
+Never invent tournament information.
+If the tournament data is empty, clearly say that
+no live tournament information is currently available.
+
+Never reveal internal tournament document IDs.
 
 You may use this profile information when the user asks about their own account, Free Fire name or Free Fire UID.
 
