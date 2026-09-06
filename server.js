@@ -6237,6 +6237,82 @@ app.post("/auth/password/reset", async (req, res) => {
 });
 
 // ============================================================
+// AI ARENA TEXT-TO-SPEECH API
+// Server-side OpenAI TTS for Android/WebView
+// ============================================================
+
+app.post("/api/ai/tts", async (req, res) => {
+  try {
+    const decoded = await requireFirebaseUser(req, res);
+    if (!decoded) return;
+
+    const text = String(req.body?.text || "").trim();
+
+    const language =
+      req.body?.language === "hi"
+        ? "hi"
+        : "en";
+
+    if (!text) {
+      return res.status(400).json({
+        ok: false,
+        error: "Text is required"
+      });
+    }
+
+    if (text.length > 5000) {
+      return res.status(400).json({
+        ok: false,
+        error: "Text is too long"
+      });
+    }
+
+    if (!openai) {
+      return res.status(503).json({
+        ok: false,
+        error: "OpenAI is not configured"
+      });
+    }
+
+    const speech =
+      await openai.audio.speech.create({
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        input: text,
+        instructions:
+          language === "hi"
+            ? "Speak naturally in clear Indian Hindi. Keep the pronunciation easy to understand."
+            : "Speak naturally in clear Indian English. Keep the pronunciation easy to understand.",
+        response_format: "mp3"
+      });
+
+    const buffer =
+      Buffer.from(
+        await speech.arrayBuffer()
+      );
+
+    return res.json({
+      ok: true,
+      mimeType: "audio/mpeg",
+      audioBase64:
+        buffer.toString("base64")
+    });
+
+  } catch (error) {
+
+    console.error(
+      "AI Arena TTS error:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Voice generation failed"
+    });
+  }
+});
+
+// ============================================================
 // AI ARENA CHAT API
 // ============================================================
 
