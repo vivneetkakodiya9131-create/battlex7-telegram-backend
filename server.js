@@ -12,7 +12,7 @@ const openai = new OpenAI({
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "16mb" }));
 
 const PORT = process.env.PORT || 10000;
 
@@ -4688,6 +4688,58 @@ async function telegram(
   return await response.json();
 }
 
+// ============================================================
+// AI ARENA — TELEGRAM MEDIA UPLOAD
+// ============================================================
+
+async function telegramMultipart(
+  method,
+  fields,
+  fileField,
+  fileDataUrl,
+  filename,
+  mimeType
+) {
+  const match = String(fileDataUrl || "").match(
+    /^data:([^;]+);base64,(.+)$/s
+  );
+
+  if (!match) {
+    throw new Error("Invalid attachment data");
+  }
+
+  const [, detectedMime, base64] = match;
+
+  const form = new FormData();
+
+  for (const [key, value] of Object.entries(fields || {})) {
+    form.append(key, String(value ?? ""));
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+
+  form.append(
+    fileField,
+    new Blob([buffer], {
+      type:
+        mimeType ||
+        detectedMime ||
+        "application/octet-stream"
+    }),
+    filename || "ai-arena-proof"
+  );
+
+  const response = await fetch(
+    telegramApi(method),
+    {
+      method: "POST",
+      body: form
+    }
+  );
+
+  return await response.json();
+}
+
 
 // ============================================================
 // PROOF TYPE
@@ -6760,13 +6812,37 @@ console.log("AI ARENA TOURNAMENT DATA:", liveTournaments);
   
 const message =
     String(req.body?.message || "").trim();
-    if (!message) {
-      return res.status(400).json({
-        ok: false,
-        error: "Message is required"
-      });
-    }
 
+const attachmentType =
+    req.body?.attachmentType === "video"
+        ? "video"
+        : req.body?.attachmentType === "image"
+            ? "image"
+            : "";
+
+const images =
+    Array.isArray(req.body?.images)
+        ? req.body.images
+            .filter(x => typeof x === "string")
+            .slice(0, 4)
+        : [];
+
+const video =
+    typeof req.body?.video === "string"
+        ? req.body.video
+        : "";
+
+if (
+    !message &&
+    !images.length &&
+    !video
+) {
+    return res.status(400).json({
+        ok: false,
+        error: "Message or attachment is required"
+    });
+}
+    
     // Optional conversation history from the app
     const history = Array.isArray(req.body?.history)
       ? req.body.history.slice(-10)
@@ -6943,9 +7019,59 @@ The user will be asked for this proof in Telegram.
 ⚡ BATTLE X7 ARENA SUPPORT
 `;
 
-    const telegramResult = await telegram(
-      "sendMessage",
-      {
+    let telegramResult;
+
+if (
+    attachmentType === "image" &&
+    images[0]
+) {
+    telegramResult =
+        await telegramMultipart(
+            "sendPhoto",
+            {
+                chat_id: CHAT_ID,
+                caption:
+                    supportMessage.slice(0, 1000)
+            },
+            "photo",
+            images[0],
+            "ai-arena-proof.jpg",
+            "image/jpeg"
+        );
+} else if (
+    attachmentType === "video" &&
+    video
+) {
+    telegramResult =
+        await telegramMultipart(
+            "sendVideo",
+            {
+                chat_id: CHAT_ID,
+                caption:
+                    supportMessage.slice(0, 1000)
+            },
+            "video",
+            video,
+            "ai-arena-proof.mp4",
+            "video/mp4"
+        );
+} else {
+    telegramResult =
+        await telegram(
+            "sendMessage",
+            {
+                chat_id: CHAT_ID,
+                text: supportMessage
+            }
+        );
+}
+
+if (!telegramResult?.ok) {
+    throw new Error(
+        telegramResult?.description ||
+        "Telegram ticket send failed"
+    );
+}
         chat_id: CHAT_ID,
         text: supportMessage
       }
@@ -7284,17 +7410,44 @@ You may use this profile information when the user asks about their own account,
 Never reveal the internal Firebase UID.
 `;
 
-    const input = [
-      {
-        role: "developer",
-        content: instructions
-      },
-      ...safeHistory,
-      {
-        role: "user",
-        content: message
-      }
-    ];
+    const userContent = [
+  {
+    type: "input_text",
+    text:
+      message ||
+      (
+        attachmentType === "video"
+          ? "Analyze this uploaded video proof."
+          : "Analyze this uploaded screenshot."
+      )
+  }
+];
+
+// Add uploaded screenshots to AI input.
+for (const imageUrl of images) {
+  if (
+    /^data:image\/(jpeg|png|webp);base64,/i.test(
+      imageUrl
+    )
+  ) {
+    userContent.push({
+      type: "input_image",
+      image_url: imageUrl
+    });
+  }
+}
+
+const input = [
+  {
+    role: "developer",
+    content: instructions
+  },
+  ...safeHistory,
+  {
+    role: "user",
+    content: userContent
+  }
+];
 
     const response = await openai.responses.create({
       model: process.env.AI_ARENA_MODEL || "gpt-5.6-luna",
