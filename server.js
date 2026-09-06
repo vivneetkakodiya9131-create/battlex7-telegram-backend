@@ -7072,10 +7072,6 @@ if (!telegramResult?.ok) {
         "Telegram ticket send failed"
     );
 }
-        chat_id: CHAT_ID,
-        text: supportMessage
-      }
-    );
 
     if (!telegramResult?.ok) {
       throw new Error(
