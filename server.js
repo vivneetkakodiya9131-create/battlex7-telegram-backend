@@ -6313,6 +6313,114 @@ app.post("/api/ai/tts", async (req, res) => {
 });
 
 // ============================================================
+// AI ARENA — LIVE VOICE SESSION
+// Creates a secure short-lived Realtime voice client secret.
+// IMPORTANT: OPENAI_API_KEY server par hi rahega.
+// ============================================================
+app.post("/api/ai/live/session", async (req, res) => {
+  try {
+    const decoded = await requireFirebaseUser(req, res);
+    if (!decoded) return;
+
+    const voice =
+      typeof req.body?.voice === "string" &&
+      req.body.voice.trim()
+        ? req.body.voice.trim()
+        : "alloy";
+
+    const language =
+      typeof req.body?.language === "string" &&
+      req.body.language.trim()
+        ? req.body.language.trim()
+        : "hi";
+
+    const allowedVoices = [
+      "maple",
+      "spruce",
+      "breeze",
+      "cove",
+      "ember",
+      "arbor",
+      "sol",
+      "juniper",
+      "vale"
+    ];
+
+    const selectedVoice =
+      allowedVoices.includes(voice.toLowerCase())
+        ? voice.toLowerCase()
+        : "maple";
+
+    const sessionResponse = await fetch(
+      "https://api.openai.com/v1/realtime/client_secrets",
+      {
+        method: "POST",
+        headers: {
+          "Authorization":
+            `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          session: {
+            type: "realtime",
+            model:
+              process.env.AI_REALTIME_MODEL ||
+              "gpt-realtime-2.1",
+            audio: {
+              output: {
+                voice: selectedVoice
+              }
+            },
+            instructions:
+              language.toLowerCase().startsWith("hi")
+                ? "Speak naturally in clear Indian Hindi. Understand Hindi, English and Hinglish. You are AI Arena for BATTLE X7 ARENA. Never modify wallet, rewards, results or withdrawals."
+                : "Speak naturally in clear English. Understand Hindi and Hinglish too. You are AI Arena for BATTLE X7 ARENA. Never modify wallet, rewards, results or withdrawals."
+          }
+        })
+      }
+    );
+
+    const data = await sessionResponse.json();
+
+    if (!sessionResponse.ok) {
+      console.error(
+        "AI Arena Live Voice session error:",
+        data
+      );
+
+      return res.status(sessionResponse.status).json({
+        ok: false,
+        error:
+          data?.error?.message ||
+          "Live voice session create failed"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      clientSecret:
+        data?.value ||
+        data?.client_secret?.value ||
+        data?.client_secret ||
+        "",
+      voice: selectedVoice,
+      language
+    });
+
+  } catch (error) {
+    console.error(
+      "AI Arena Live Voice error:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Live voice session failed"
+    });
+  }
+});
+
+// ============================================================
 // AI ARENA CHAT API
 // ============================================================
 
