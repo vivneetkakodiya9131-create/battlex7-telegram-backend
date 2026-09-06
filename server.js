@@ -6533,6 +6533,142 @@ app.post("/api/ai/live/session", async (req, res) => {
   }
 });
 
+
+// ============================================================
+// AI ARENA — LIVE VOICE WEBRTC CALL
+// ============================================================
+
+app.post("/api/ai/live/call", async (req, res) => {
+  try {
+    const decoded = await requireFirebaseUser(req, res);
+    if (!decoded) return;
+
+    const sdp = String(req.body?.sdp || "").trim();
+
+    if (!sdp) {
+      return res.status(400).json({
+        ok: false,
+        error: "SDP offer is required"
+      });
+    }
+
+    const voiceMap = {
+      maple: "marin",
+      spruce: "cedar",
+      breeze: "alloy",
+      cove: "coral",
+      ember: "echo",
+      arbor: "sage",
+      sol: "verse",
+      juniper: "shimmer",
+      vale: "marin"
+    };
+
+    const requestedVoice =
+      String(req.body?.voice || "maple")
+        .trim()
+        .toLowerCase();
+
+    const selectedVoice =
+      voiceMap[requestedVoice] || "marin";
+
+    const language =
+      String(req.body?.language || "hi")
+        .trim()
+        .toLowerCase();
+
+    const session = {
+      type: "realtime",
+      model:
+        process.env.AI_REALTIME_MODEL ||
+        "gpt-realtime-2.1",
+
+      audio: {
+        output: {
+          voice: selectedVoice
+        }
+      },
+
+      turn_detection: {
+        type: "server_vad",
+        create_response: true
+      },
+
+      instructions:
+        language.startsWith("hi")
+          ? "You are AI Arena for BATTLE X7 ARENA. Speak naturally in Indian Hindi and Hinglish. Understand Hindi, English and Hinglish. Only provide read-only help. Never modify wallet, rewards, tournament results or withdrawals. Create a support ticket only when explicitly requested."
+          : "You are AI Arena for BATTLE X7 ARENA. Speak naturally in English and understand Hindi and Hinglish. Only provide read-only help. Never modify wallet, rewards, tournament results or withdrawals. Create a support ticket only when explicitly requested."
+    };
+
+    const form = new FormData();
+
+    form.append(
+      "sdp",
+      new Blob([sdp], {
+        type: "application/sdp"
+      }),
+      "offer.sdp"
+    );
+
+    form.append(
+      "session",
+      new Blob(
+        [JSON.stringify(session)],
+        {
+          type: "application/json"
+        }
+      ),
+      "session.json"
+    );
+
+    const openaiResponse = await fetch(
+      "https://api.openai.com/v1/realtime/calls",
+      {
+        method: "POST",
+        headers: {
+          "Authorization":
+            `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: form
+      }
+    );
+
+    const answerSdp =
+      await openaiResponse.text();
+
+    if (!openaiResponse.ok) {
+      console.error(
+        "AI Arena Realtime WebRTC error:",
+        answerSdp
+      );
+
+      return res.status(openaiResponse.status).json({
+        ok: false,
+        error:
+          answerSdp ||
+          "Realtime connection failed"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      sdp: answerSdp,
+      voice: selectedVoice,
+      language
+    });
+
+  } catch (error) {
+    console.error(
+      "AI Arena Live Voice Call error:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Live Voice connection failed"
+    });
+  }
+});
 // ============================================================
 // AI ARENA CHAT API
 // ============================================================
