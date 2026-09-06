@@ -6429,6 +6429,7 @@ app.post("/api/ai/live/session", async (req, res) => {
     const decoded = await requireFirebaseUser(req, res);
     if (!decoded) return;
 
+    // UI voice name -> OpenAI real voice
     const voiceMap = {
       maple: "marin",
       spruce: "cedar",
@@ -6442,33 +6443,17 @@ app.post("/api/ai/live/session", async (req, res) => {
     };
 
     const requestedVoice =
-      typeof req.body?.voice === "string"
-        ? req.body.voice.trim().toLowerCase()
-        : "maple";
+      String(req.body?.voice || "maple")
+        .trim()
+        .toLowerCase();
 
+    // NEVER send maple/spruce/etc. to OpenAI
     const selectedVoice =
-      voiceMap[requestedVoice] ||
-      (
-        [
-          "marin",
-          "cedar",
-          "alloy",
-          "coral",
-          "echo",
-          "sage",
-          "verse",
-          "shimmer",
-          "nova"
-        ].includes(requestedVoice)
-          ? requestedVoice
-          : "marin"
-      );
+      voiceMap[requestedVoice] || "marin";
 
     const language =
-      typeof req.body?.language === "string" &&
-      req.body.language.trim()
-        ? req.body.language.trim()
-        : "hi";
+      String(req.body?.language || "hi")
+        .trim();
 
     const sessionResponse = await fetch(
       "https://api.openai.com/v1/realtime/client_secrets",
@@ -6485,15 +6470,17 @@ app.post("/api/ai/live/session", async (req, res) => {
             model:
               process.env.AI_REALTIME_MODEL ||
               "gpt-realtime-2.1",
+
             audio: {
               output: {
                 voice: selectedVoice
               }
             },
+
             instructions:
               language.toLowerCase().startsWith("hi")
                 ? "Speak naturally in clear Indian Hindi. Understand Hindi, English and Hinglish. You are AI Arena for BATTLE X7 ARENA. Never modify wallet, rewards, results or withdrawals."
-                : "Speak naturally in clear English. Understand Hindi and Hinglish. You are AI Arena for BATTLE X7 ARENA. Never modify wallet, rewards, results or withdrawals."
+                : "Speak naturally in clear English. Understand Hindi, English and Hinglish. You are AI Arena for BATTLE X7 ARENA. Never modify wallet, rewards, results or withdrawals."
           }
         })
       }
@@ -6517,12 +6504,19 @@ app.post("/api/ai/live/session", async (req, res) => {
 
     return res.json({
       ok: true,
+
       clientSecret:
         data?.value ||
         data?.client_secret?.value ||
         data?.client_secret ||
         "",
-      voice: selectedVoice,
+
+      // Frontend ko UI name bhi wapas milega
+      voice: requestedVoice,
+
+      // Debug ke liye actual OpenAI voice
+      openaiVoice: selectedVoice,
+
       language
     });
 
