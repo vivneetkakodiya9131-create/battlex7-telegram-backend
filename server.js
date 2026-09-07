@@ -6543,7 +6543,45 @@ app.post("/api/ai/live/call", async (req, res) => {
     const decoded = await requireFirebaseUser(req, res);
     if (!decoded) return;
 
-    const sdp = String(req.body?.sdp || "").trim();
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(503).json({
+        ok: false,
+        error: "Live Voice is not configured on the server"
+      });
+    }
+
+    const sdp =
+      String(req.body?.sdp || "").trim();
+
+    const language =
+      req.body?.language === "en"
+        ? "en"
+        : "hi";
+
+    const allowedVoices = new Set([
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "sage",
+      "shimmer",
+      "verse",
+      "marin",
+      "cedar"
+    ]);
+
+    const requestedVoice =
+      String(
+        req.body?.voice || ""
+      )
+        .trim()
+        .toLowerCase();
+
+    const selectedVoice =
+      allowedVoices.has(requestedVoice)
+        ? requestedVoice
+        : "marin";
 
     if (!sdp) {
       return res.status(400).json({
@@ -6552,86 +6590,171 @@ app.post("/api/ai/live/call", async (req, res) => {
       });
     }
 
-    const voiceMap = {
-      maple: "marin",
-      spruce: "cedar",
-      breeze: "alloy",
-      cove: "coral",
-      ember: "echo",
-      arbor: "sage",
-      sol: "verse",
-      juniper: "shimmer",
-      vale: "marin"
-    };
-
-    const requestedVoice =
-      String(req.body?.voice || "maple")
-        .trim()
-        .toLowerCase();
-
-    const selectedVoice =
-      voiceMap[requestedVoice] || "marin";
-
-    const language =
-      String(req.body?.language || "hi")
-        .trim()
-        .toLowerCase();
+    if (sdp.length > 2000000) {
+      return res.status(400).json({
+        ok: false,
+        error: "SDP offer is too large"
+      });
+    }
 
     const session = {
       type: "realtime",
+
       model:
         process.env.AI_REALTIME_MODEL ||
         "gpt-realtime-2.1",
 
-      audio: {
-        output: {
-          voice: selectedVoice
-        }
-      },
-
-      turn_detection: {
-        type: "server_vad",
-        create_response: true
-      },
+      voice: selectedVoice,
 
       instructions:
-        language.startsWith("hi")
-          ? "You are AI Arena for BATTLE X7 ARENA. Speak naturally in Indian Hindi and Hinglish. Understand Hindi, English and Hinglish. Only provide read-only help. Never modify wallet, rewards, tournament results or withdrawals. Create a support ticket only when explicitly requested."
-          : "You are AI Arena for BATTLE X7 ARENA. Speak naturally in English and understand Hindi and Hinglish. Only provide read-only help. Never modify wallet, rewards, tournament results or withdrawals. Create a support ticket only when explicitly requested."
+        language === "hi"
+          ? `
+You are AI ARENA, the official BATTLE X7 ARENA
+voice assistant.
+
+Speak naturally in Indian Hindi/Hinglish.
+
+Be concise, friendly and helpful.
+
+You are a READ-ONLY assistant.
+
+Never invent:
+- wallet balance
+- tournament information
+- earnings
+- withdrawals
+- deposits
+- referrals
+- account information
+
+Never reveal:
+- Firebase UID
+- Firestore document IDs
+- database IDs
+- internal IDs
+- UPI IDs
+- UTR numbers
+- backend secrets
+- API keys
+- private server information
+
+IMPORTANT RESULT RULE:
+
+There is NO kill system.
+
+If the user asks about tournament results,
+performance or rewards, only discuss
+EARNING / REWARD information.
+
+Never mention:
+- kills
+- wins
+- winning statistics
+- skills
+- match statistics
+
+If information is unavailable,
+say that you cannot verify it instead
+of guessing.
+
+For support problems, guide the user
+toward the normal BATTLE X7 ARENA
+support/ticket system.
+`
+          : `
+You are AI ARENA, the official BATTLE X7 ARENA
+voice assistant.
+
+Speak naturally in clear English.
+
+Be concise, friendly and helpful.
+
+You are a READ-ONLY assistant.
+
+Never invent:
+- wallet balance
+- tournament information
+- earnings
+- withdrawals
+- deposits
+- referrals
+- account information
+
+Never reveal:
+- Firebase UID
+- Firestore document IDs
+- database IDs
+- internal IDs
+- UPI IDs
+- UTR numbers
+- backend secrets
+- API keys
+- private server information
+
+IMPORTANT RESULT RULE:
+
+There is NO kill system.
+
+If the user asks about tournament results,
+performance or rewards, only discuss
+EARNING / REWARD information.
+
+Never mention:
+- kills
+- wins
+- winning statistics
+- skills
+- match statistics
+
+If information is unavailable,
+say that you cannot verify it instead
+of guessing.
+
+For support problems, guide the user
+toward the normal BATTLE X7 ARENA
+support/ticket system.
+`
     };
+
+    // ============================================================
+    // IMPORTANT:
+    // OpenAI Realtime /calls expects SDP as a normal
+    // multipart text field.
+    // ============================================================
 
     const form = new FormData();
 
     form.append(
       "sdp",
-      new Blob([sdp], {
-        type: "application/sdp"
-      }),
-      "offer.sdp"
+      sdp
     );
 
     form.append(
       "session",
       new Blob(
-        [JSON.stringify(session)],
+        [
+          JSON.stringify(session)
+        ],
         {
           type: "application/json"
         }
-      ),
-      "session.json"
+      )
     );
 
-    const openaiResponse = await fetch(
-      "https://api.openai.com/v1/realtime/calls",
-      {
-        method: "POST",
-        headers: {
-          "Authorization":
-            `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        body: form
-      }
-    );
+    const openaiResponse =
+      await fetch(
+        "https://api.openai.com/v1/realtime/calls",
+        {
+          method: "POST",
+
+          headers: {
+            "Authorization":
+              `Bearer ${process.env.OPENAI_API_KEY}`
+          },
+
+          body: form
+        }
+      );
 
     const answerSdp =
       await openaiResponse.text();
@@ -6642,7 +6765,9 @@ app.post("/api/ai/live/call", async (req, res) => {
         answerSdp
       );
 
-      return res.status(openaiResponse.status).json({
+      return res.status(
+        openaiResponse.status
+      ).json({
         ok: false,
         error:
           answerSdp ||
@@ -6652,8 +6777,11 @@ app.post("/api/ai/live/call", async (req, res) => {
 
     return res.json({
       ok: true,
+
       sdp: answerSdp,
+
       voice: selectedVoice,
+
       language
     });
 
@@ -6665,10 +6793,13 @@ app.post("/api/ai/live/call", async (req, res) => {
 
     return res.status(500).json({
       ok: false,
-      error: "Live Voice connection failed"
+      error:
+        "Live Voice connection failed"
     });
   }
 });
+
+
 // ============================================================
 // AI ARENA CHAT API
 // ============================================================
