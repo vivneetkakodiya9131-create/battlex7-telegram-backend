@@ -6697,7 +6697,6 @@ app.post("/api/ai/chat", async (req, res) => {
 
 if (!decoded) return;
 
-
 // ----------------------------------------------------------
 // LOAD LOGGED-IN USER PROFILE FROM FIRESTORE
 // ----------------------------------------------------------
@@ -7462,6 +7461,7 @@ Description:
 ${description}
 
 ━━━━━━━━━━━━━━━━━━
+
 ${proofType === "video"
   ? "🎥 Required Proof: VIDEO"
   : "📸 Required Proof: SCREENSHOT"}
