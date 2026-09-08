@@ -7524,8 +7524,8 @@ if (!telegramResult?.ok) {
       proofType === "video" ? "v_" : "p_";
 
     const telegramUrl =
-      `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
-
+  `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
+    
     return res.json({
       ok: true,
       reply:
