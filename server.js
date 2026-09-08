@@ -6446,9 +6446,9 @@ app.post("/api/ai/live/call", async (req, res) => {
     const rawSdp = req.body?.sdp;
 
     const sdp =
-      typeof rawSdp === "string"
-        ? rawSdp.trim()
-        : "";
+  typeof rawSdp === "string"
+    ? rawSdp
+    : "";
 
     // --------------------------------------------------------
     // Validate SDP
@@ -6535,35 +6535,6 @@ app.post("/api/ai/live/call", async (req, res) => {
       instructions:
         language === "hi"
           ? `
-You are AI ARENA, the official BATTLE X7 ARENA voice assistant.
-
-Speak naturally in Indian Hindi/Hinglish.
-
-Be concise, friendly and helpful.
-
-You are a READ-ONLY assistant.
-
-Never invent wallet balance, tournament information,
-earnings, withdrawals, deposits, referrals or account information.
-
-Never reveal Firebase UID, Firestore document IDs,
-database IDs, internal IDs, UPI IDs, UTR numbers,
-backend secrets, API keys or private server information.
-
-There is NO kill system.
-
-For tournament results, performance or rewards,
-only discuss EARNING / REWARD information.
-
-Never mention kills, wins, winning statistics,
-skills or match statistics.
-
-If information is unavailable, say that you cannot
-verify it instead of guessing.
-
-For support problems, guide the user toward the
-normal BATTLE X7 ARENA support/ticket system.
-`
           : `
 You are AI ARENA, the official BATTLE X7 ARENA voice assistant.
 
@@ -6593,6 +6564,7 @@ verify it instead of guessing.
 
 For support problems, guide the user toward the
 normal BATTLE X7 ARENA support/ticket system.
+`;
 
     // --------------------------------------------------------
     // OpenAI Realtime multipart request
@@ -6606,16 +6578,9 @@ normal BATTLE X7 ARENA support/ticket system.
     );
 
     form.append(
-      "session",
-      new Blob(
-        [
-          JSON.stringify(session)
-        ],
-        {
-          type: "application/json"
-        }
-      )
-    );
+  "session",
+  JSON.stringify(session)
+);
 
 // --------------------------------------------------------
 // Send offer to OpenAI
