@@ -7499,6 +7499,7 @@ if (
         );
 }
 
+
 if (!telegramResult?.ok) {
     throw new Error(
         telegramResult?.description ||
@@ -7506,41 +7507,32 @@ if (!telegramResult?.ok) {
     );
 }
 
-    if (!telegramResult?.ok) {
-      throw new Error(
-        telegramResult?.description ||
-        "Telegram ticket send failed"
-      );
-    }
+const prefix =
+  proofType === "video" ? "v_" : "p_";
 
-    const prefix =
-      proofType === "video" ? "v_" : "p_";
-
-    const telegramUrl =
+const telegramUrl =
   `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
-    
-    return res.json({
-      ok: true,
-      reply:
-        `✅ Support ticket create ho gaya.\n\n` +
-        `🎫 Ticket ID: #${ticketId}\n\n` +
-        `Aapki problem support team ko bhej di gayi hai.\n\n` +
-        `Open Ticket in Telegram: ${telegramUrl}`
-    });
 
-  } catch (ticketError) {
-    console.error(
-      "AI Arena support ticket error:",
-      ticketError
-    );
+return res.json({
+  ok: true,
+  reply:
+    `✅ Support ticket create ho gaya.\n\n` +
+    `🎫 Ticket ID: #${ticketId}\n\n` +
+    `Aapki problem support team ko bhej di gayi hai.\n\n` +
+    `Open Ticket in Telegram: ${telegramUrl}`
+});
 
-    return res.status(500).json({
-      ok: false,
-      error: "Support ticket create nahi ho saka."
-    });
-  }
+} catch (ticketError) {
+  console.error(
+    "AI Arena support ticket error:",
+    ticketError
+  );
+
+  return res.status(500).json({
+    ok: false,
+    error: "Support ticket create nahi ho saka."
+  });
 }
-
   
     // ==========================================================
 // AI SUPPORT TICKET — INTELLIGENT PROBLEM + DESCRIPTION
