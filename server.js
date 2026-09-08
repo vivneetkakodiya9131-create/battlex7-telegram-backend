@@ -7622,7 +7622,10 @@ if (asksForTicket) {
       "User has reported a support issue through AI Arena. The support team is requested to review and assist the user.";
 
     const ticketId =
-      `AI-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  "AI-" +
+  Date.now() +
+  "-" +
+  Math.floor(100 + Math.random() * 900);
 
     const proofType = getProofType(
       "AI ARENA",
