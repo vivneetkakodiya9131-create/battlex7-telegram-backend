@@ -7434,42 +7434,30 @@ if (asksForTicket) {
       description
     );
 
-    const supportMessage = `
-🎫 NEW SUPPORT TICKET
-
-━━━━━━━━━━━━━━━━━━
-🆔 Ticket ID: ${ticketId}
-
-👤 USER DETAILS
-
-UID: ${currentFreeFireUid || "N/A"}
-Free Fire Name: ${currentFreeFireName || "N/A"}
-Username: ${currentUsername || "N/A"}
-Mobile: ${currentMobile || "N/A"}
-Email: ${currentEmail || "N/A"}
-
-━━━━━━━━━━━━━━━━━━
-📋 TICKET DETAILS
-
-Category: AI ARENA
-Tournament ID: N/A
-
-Problem:
-${problemSummary}
-
-Description:
-${description}
-
-━━━━━━━━━━━━━━━━━━
-
-${proofType === "video"
-  ? "🎥 Required Proof: VIDEO"
-  : "📸 Required Proof: SCREENSHOT"}
-
-The user will be asked for this proof in Telegram.
-
-⚡ BATTLE X7 ARENA SUPPORT
-`;
+     const supportMessage = "🎫 NEW SUPPORT TICKET\n\n" +
+  "━━━━━━━━━━━━━━━━━━\n" +
+  "🆔 Ticket ID: " + ticketId + "\n\n" +
+  "👤 USER DETAILS\n\n" +
+  "UID: " + (currentFreeFireUid || "N/A") + "\n" +
+  "Free Fire Name: " + (currentFreeFireName || "N/A") + "\n" +
+  "Username: " + (currentUsername || "N/A") + "\n" +
+  "Mobile: " + (currentMobile || "N/A") + "\n" +
+  "Email: " + (currentEmail || "N/A") + "\n\n" +
+  "━━━━━━━━━━━━━━━━━━\n" +
+  "📋 TICKET DETAILS\n\n" +
+  "Category: AI ARENA\n" +
+  "Tournament ID: N/A\n\n" +
+  "Problem:\n" +
+  problemSummary + "\n\n" +
+  "Description:\n" +
+  description + "\n\n" +
+  "━━━━━━━━━━━━━━━━━━\n" +
+  (proofType === "video"
+    ? "🎥 Required Proof: VIDEO"
+    : "📸 Required Proof: SCREENSHOT") +
+  "\n\n" +
+  "The user will be asked for this proof in Telegram.\n\n" +
+  "⚡ BATTLE X7 ARENA SUPPORT";
 
     let telegramResult;
 
