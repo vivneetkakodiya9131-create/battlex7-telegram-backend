@@ -6533,7 +6533,6 @@ app.post("/api/ai/live/session", async (req, res) => {
   }
 });
 
-
 // ============================================================
 // AI ARENA — LIVE VOICE WEBRTC CALL
 // ============================================================
@@ -6565,7 +6564,7 @@ app.post("/api/ai/live/call", async (req, res) => {
         : "";
 
     // --------------------------------------------------------
-    // Validate SDP before sending to OpenAI
+    // Validate SDP
     // --------------------------------------------------------
 
     if (
@@ -6630,7 +6629,7 @@ app.post("/api/ai/live/call", async (req, res) => {
         : "marin";
 
     // --------------------------------------------------------
-    // Realtime session configuration
+    // Realtime session
     // --------------------------------------------------------
 
     const session = {
@@ -6657,42 +6656,26 @@ Be concise, friendly and helpful.
 
 You are a READ-ONLY assistant.
 
-Never invent:
-- wallet balance
-- tournament information
-- earnings
-- withdrawals
-- deposits
-- referrals
-- account information
+Never invent wallet balance, tournament information,
+earnings, withdrawals, deposits, referrals or account information.
 
-Never reveal:
-- Firebase UID
-- Firestore document IDs
-- database IDs
-- internal IDs
-- UPI IDs
-- UTR numbers
-- backend secrets
-- API keys
-- private server information
-
-IMPORTANT RESULT RULE:
+Never reveal Firebase UID, Firestore document IDs,
+database IDs, internal IDs, UPI IDs, UTR numbers,
+backend secrets, API keys or private server information.
 
 There is NO kill system.
 
-If the user asks about tournament results, performance or rewards, only discuss EARNING / REWARD information.
+For tournament results, performance or rewards,
+only discuss EARNING / REWARD information.
 
-Never mention:
-- kills
-- wins
-- winning statistics
-- skills
-- match statistics
+Never mention kills, wins, winning statistics,
+skills or match statistics.
 
-If information is unavailable, say that you cannot verify it instead of guessing.
+If information is unavailable, say that you cannot
+verify it instead of guessing.
 
-For support problems, guide the user toward the normal BATTLE X7 ARENA support/ticket system.
+For support problems, guide the user toward the
+normal BATTLE X7 ARENA support/ticket system.
 `
           : `
 You are AI ARENA, the official BATTLE X7 ARENA voice assistant.
@@ -6703,47 +6686,30 @@ Be concise, friendly and helpful.
 
 You are a READ-ONLY assistant.
 
-Never invent:
-- wallet balance
-- tournament information
-- earnings
-- withdrawals
-- deposits
-- referrals
-- account information
+Never invent wallet balance, tournament information,
+earnings, withdrawals, deposits, referrals or account information.
 
-Never reveal:
-- Firebase UID
-- Firestore document IDs
-- database IDs
-- internal IDs
-- UPI IDs
-- UTR numbers
-- backend secrets
-- API keys
-- private server information
-
-IMPORTANT RESULT RULE:
+Never reveal Firebase UID, Firestore document IDs,
+database IDs, internal IDs, UPI IDs, UTR numbers,
+backend secrets, API keys or private server information.
 
 There is NO kill system.
 
-If the user asks about tournament results, performance or rewards, only discuss EARNING / REWARD information.
+For tournament results, performance or rewards,
+only discuss EARNING / REWARD information.
 
-Never mention:
-- kills
-- wins
-- winning statistics
-- skills
-- match statistics
+Never mention kills, wins, winning statistics,
+skills or match statistics.
 
-If information is unavailable, say that you cannot verify it instead of guessing.
+If information is unavailable, say that you cannot
+verify it instead of guessing.
 
-For support problems, guide the user toward the normal BATTLE X7 ARENA support/ticket system.
-`
-    };
+For support problems, guide the user toward the
+normal BATTLE X7 ARENA support/ticket system.
+`;
 
     // --------------------------------------------------------
-    // OpenAI Realtime WebRTC multipart request
+    // OpenAI Realtime multipart request
     // --------------------------------------------------------
 
     const form = new FormData();
@@ -6766,7 +6732,7 @@ For support problems, guide the user toward the normal BATTLE X7 ARENA support/t
     );
 
     // --------------------------------------------------------
-    // Send SDP offer to OpenAI
+    // Send offer to OpenAI
     // --------------------------------------------------------
 
     const openaiResponse =
@@ -6832,7 +6798,6 @@ For support problems, guide the user toward the normal BATTLE X7 ARENA support/t
     });
   }
 });
-
 
     // ============================================================
     // IMPORTANT:
