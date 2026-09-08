@@ -6541,7 +6541,10 @@ app.post("/api/ai/live/session", async (req, res) => {
 app.post("/api/ai/live/call", async (req, res) => {
   try {
     const decoded = await requireFirebaseUser(req, res);
-    if (!decoded) return;
+
+    if (!decoded) {
+      return;
+    }
 
     if (!process.env.OPENAI_API_KEY) {
       return res.status(503).json({
@@ -6550,13 +6553,56 @@ app.post("/api/ai/live/call", async (req, res) => {
       });
     }
 
+    // --------------------------------------------------------
+    // Read SDP safely
+    // --------------------------------------------------------
+
+    const rawSdp = req.body?.sdp;
+
     const sdp =
-      String(req.body?.sdp || "").trim();
+      typeof rawSdp === "string"
+        ? rawSdp.trim()
+        : "";
+
+    // --------------------------------------------------------
+    // Validate SDP before sending to OpenAI
+    // --------------------------------------------------------
+
+    if (
+      !sdp ||
+      !sdp.includes("v=0") ||
+      !sdp.includes("m=")
+    ) {
+      console.error(
+        "AI Arena Live Voice: Invalid or empty SDP received"
+      );
+
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Invalid/empty WebRTC SDP offer received from AI Arena frontend"
+      });
+    }
+
+    if (sdp.length > 2000000) {
+      return res.status(400).json({
+        ok: false,
+        error: "SDP offer is too large"
+      });
+    }
+
+    // --------------------------------------------------------
+    // Language
+    // --------------------------------------------------------
 
     const language =
       req.body?.language === "en"
         ? "en"
         : "hi";
+
+    // --------------------------------------------------------
+    // Supported OpenAI Realtime voices
+    // --------------------------------------------------------
 
     const allowedVoices = new Set([
       "alloy",
@@ -6583,19 +6629,9 @@ app.post("/api/ai/live/call", async (req, res) => {
         ? requestedVoice
         : "marin";
 
-    if (!sdp) {
-      return res.status(400).json({
-        ok: false,
-        error: "SDP offer is required"
-      });
-    }
-
-    if (sdp.length > 2000000) {
-      return res.status(400).json({
-        ok: false,
-        error: "SDP offer is too large"
-      });
-    }
+    // --------------------------------------------------------
+    // Realtime session configuration
+    // --------------------------------------------------------
 
     const session = {
       type: "realtime",
@@ -6604,13 +6640,16 @@ app.post("/api/ai/live/call", async (req, res) => {
         process.env.AI_REALTIME_MODEL ||
         "gpt-realtime-2.1",
 
-      voice: selectedVoice,
+      audio: {
+        output: {
+          voice: selectedVoice
+        }
+      },
 
       instructions:
         language === "hi"
           ? `
-You are AI ARENA, the official BATTLE X7 ARENA
-voice assistant.
+You are AI ARENA, the official BATTLE X7 ARENA voice assistant.
 
 Speak naturally in Indian Hindi/Hinglish.
 
@@ -6642,9 +6681,7 @@ IMPORTANT RESULT RULE:
 
 There is NO kill system.
 
-If the user asks about tournament results,
-performance or rewards, only discuss
-EARNING / REWARD information.
+If the user asks about tournament results, performance or rewards, only discuss EARNING / REWARD information.
 
 Never mention:
 - kills
@@ -6653,17 +6690,12 @@ Never mention:
 - skills
 - match statistics
 
-If information is unavailable,
-say that you cannot verify it instead
-of guessing.
+If information is unavailable, say that you cannot verify it instead of guessing.
 
-For support problems, guide the user
-toward the normal BATTLE X7 ARENA
-support/ticket system.
+For support problems, guide the user toward the normal BATTLE X7 ARENA support/ticket system.
 `
           : `
-You are AI ARENA, the official BATTLE X7 ARENA
-voice assistant.
+You are AI ARENA, the official BATTLE X7 ARENA voice assistant.
 
 Speak naturally in clear English.
 
@@ -6695,9 +6727,7 @@ IMPORTANT RESULT RULE:
 
 There is NO kill system.
 
-If the user asks about tournament results,
-performance or rewards, only discuss
-EARNING / REWARD information.
+If the user asks about tournament results, performance or rewards, only discuss EARNING / REWARD information.
 
 Never mention:
 - kills
@@ -6706,15 +6736,103 @@ Never mention:
 - skills
 - match statistics
 
-If information is unavailable,
-say that you cannot verify it instead
-of guessing.
+If information is unavailable, say that you cannot verify it instead of guessing.
 
-For support problems, guide the user
-toward the normal BATTLE X7 ARENA
-support/ticket system.
+For support problems, guide the user toward the normal BATTLE X7 ARENA support/ticket system.
 `
     };
+
+    // --------------------------------------------------------
+    // OpenAI Realtime WebRTC multipart request
+    // --------------------------------------------------------
+
+    const form = new FormData();
+
+    form.append(
+      "sdp",
+      sdp
+    );
+
+    form.append(
+      "session",
+      new Blob(
+        [
+          JSON.stringify(session)
+        ],
+        {
+          type: "application/json"
+        }
+      )
+    );
+
+    // --------------------------------------------------------
+    // Send SDP offer to OpenAI
+    // --------------------------------------------------------
+
+    const openaiResponse =
+      await fetch(
+        "https://api.openai.com/v1/realtime/calls",
+        {
+          method: "POST",
+
+          headers: {
+            "Authorization":
+              `Bearer ${process.env.OPENAI_API_KEY}`
+          },
+
+          body: form
+        }
+      );
+
+    const answerSdp =
+      await openaiResponse.text();
+
+    // --------------------------------------------------------
+    // OpenAI error
+    // --------------------------------------------------------
+
+    if (!openaiResponse.ok) {
+      console.error(
+        "AI Arena Realtime WebRTC error:",
+        answerSdp
+      );
+
+      return res.status(
+        openaiResponse.status
+      ).json({
+        ok: false,
+        error:
+          answerSdp ||
+          "Realtime connection failed"
+      });
+    }
+
+    // --------------------------------------------------------
+    // Success
+    // --------------------------------------------------------
+
+    return res.json({
+      ok: true,
+      sdp: answerSdp,
+      voice: selectedVoice,
+      language
+    });
+
+  } catch (error) {
+
+    console.error(
+      "AI Arena Live Voice Call error:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error:
+        "Live Voice connection failed"
+    });
+  }
+});
+
 
     // ============================================================
     // IMPORTANT:
