@@ -6706,7 +6706,6 @@ verify it instead of guessing.
 
 For support problems, guide the user toward the
 normal BATTLE X7 ARENA support/ticket system.
-`;
 
     // --------------------------------------------------------
     // OpenAI Realtime multipart request
