@@ -12,7 +12,7 @@ const openai = new OpenAI({
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "16mb" }));
+app.use(express.json({ limit: "160mb" }));
 
 const PORT = process.env.PORT || 10000;
 
