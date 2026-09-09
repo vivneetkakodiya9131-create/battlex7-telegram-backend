@@ -4853,9 +4853,8 @@ function getProofType(
     }
   }
 
-  return "screenshot";
+  return "image";
 }
-
 
 // ============================================================
 // HOME
