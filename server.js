@@ -7431,9 +7431,9 @@ try {
     // -----------------------------------------------
 
     if (
-      proofType === "screenshot" &&
-      pendingTicket.proof_data
-    ) {
+  proofType === "image" &&
+  pendingTicket.proof_data
+) {
 
       telegramResult =
         await telegramMultipart(
