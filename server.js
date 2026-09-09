@@ -6275,16 +6275,22 @@ app.post("/api/ai/tts", async (req, res) => {
     }
 
     const speech =
-  await openai.audio.speech.create({
-    model: "gpt-4o-mini-tts",
-    voice: "coral",
-    input: text,
-    instructions:
-      language === "hi"
-        ? "Speak in a warm, natural Indian female conversational voice. Sound relaxed, friendly and expressive, like a real person having a normal conversation. Do not sound robotic, mechanical, artificial, overly formal, or like a news reader. Use natural pauses and sentence rhythm, with gentle changes in intonation. Speak at a comfortable, slightly slower pace so every word is clear. Pronounce Hindi words naturally and clearly, and pronounce English words and numbers naturally. Never read emoji names, icon names, markdown symbols, URLs, or formatting symbols aloud."
-        : "Speak in a warm, natural Indian female conversational voice. Sound relaxed, friendly and expressive, like a real person having a normal conversation. Do not sound robotic, mechanical, artificial, overly formal, or like a news reader. Use natural pauses and sentence rhythm, with gentle changes in intonation. Speak at a comfortable, slightly slower pace so every word is clear. Pronounce English words, numbers and tournament names naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs, or formatting symbols aloud.",
-    response_format: "mp3"
-  });
+      await openai.audio.speech.create({
+        model: "gpt-4o-mini-tts",
+
+        // Friendly female-style voice
+        voice: "shimmer",
+
+        input: text,
+
+        instructions:
+          language === "hi"
+            ? "Speak as a warm, friendly young Indian female support assistant. Sound natural, soft, cheerful, caring and conversational, like a real person talking naturally to a user. Avoid any robotic, mechanical, synthetic, monotone, news-reader or overly formal style. Use natural pauses, breathing-like rhythm, gentle emotional expression and natural changes in pitch and intonation. Speak at a comfortable, slightly slower pace so every word is clear. Use natural Indian Hindi and Hinglish pronunciation. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Keep the tone friendly and reassuring, but do not exaggerate emotions. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud."
+
+            : "Speak as a warm, friendly young Indian female support assistant. Sound natural, soft, cheerful, caring and conversational, like a real person talking naturally to a user. Avoid any robotic, mechanical, synthetic, monotone, news-reader or overly formal style. Use natural pauses, breathing-like rhythm, gentle emotional expression and natural changes in pitch and intonation. Speak at a comfortable, slightly slower pace so every word is clear. Use natural Indian English pronunciation. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Keep the tone friendly and reassuring, but do not exaggerate emotions. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud.",
+
+        response_format: "mp3"
+      });
 
     const buffer =
       Buffer.from(
