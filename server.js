@@ -4740,6 +4740,75 @@ async function telegramMultipart(
   return await response.json();
 }
 
+// ============================================================
+// AI ARENA — PENDING TICKET HELPERS
+// ============================================================
+
+async function ensureAIArenaPendingTicketsTable() {
+  if (!pool) {
+    throw new Error("Neon DATABASE_URL is not configured");
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_arena_pending_tickets (
+      id BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT,
+      username TEXT,
+      free_fire_uid TEXT,
+      free_fire_name TEXT,
+
+      problem_summary TEXT NOT NULL,
+      description TEXT NOT NULL,
+
+      proof_type TEXT NOT NULL,
+      proof_data TEXT,
+      proof_mime_type TEXT,
+
+      status TEXT NOT NULL DEFAULT 'proof_required',
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ai_arena_pending_user
+    ON ai_arena_pending_tickets(user_id)
+  `);
+}
+
+
+async function getPendingAIArenaTicket(userId) {
+  if (!pool || !userId) return null;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM ai_arena_pending_tickets
+    WHERE user_id = $1
+      AND status IN ('proof_required', 'confirmation_required')
+    ORDER BY updated_at DESC
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+
+async function deletePendingAIArenaTicket(userId) {
+  if (!pool || !userId) return;
+
+  await pool.query(
+    `
+    DELETE FROM ai_arena_pending_tickets
+    WHERE user_id = $1
+    `,
+    [userId]
+  );
+}
 
 // ============================================================
 // PROOF TYPE
@@ -6942,9 +7011,10 @@ if (
         content: item.content.slice(0, 4000)
       }));
 
-    // ----------------------------------------------------------
-// AI ARENA SUPPORT TICKET CREATION
 // ----------------------------------------------------------
+// AI ARENA SUPPORT TICKET CREATION — NEON PERSISTENT FLOW
+// ----------------------------------------------------------
+
 const normalizedMessage = message.toLowerCase();
 
 const explicitTicketRequest =
@@ -6968,21 +7038,68 @@ const confirmsTicket =
     message
   );
 
-const asksForTicket =
-  explicitTicketRequest ||
-  (previousAssistantOfferedTicket && confirmsTicket);
+try {
 
-if (asksForTicket) {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    return res.json({
-      ok: true,
-      reply:
-        "Bhai, support ticket system abhi available nahi hai. Thodi der baad try karo."
-    });
+  // --------------------------------------------------------
+  // Make sure Neon table exists
+  // --------------------------------------------------------
+
+  if (pool) {
+    await ensureAIArenaPendingTicketsTable();
   }
 
-  try {
-    // Get the latest profile data before creating the ticket.
+  // --------------------------------------------------------
+  // Get existing pending ticket for this user
+  // --------------------------------------------------------
+
+  const pendingTicket =
+    pool && decoded?.uid
+      ? await getPendingAIArenaTicket(decoded.uid)
+      : null;
+
+
+  // ========================================================
+  // CASE 1 — USER ASKS TO CREATE A TICKET
+  // ========================================================
+
+  if (explicitTicketRequest) {
+
+    if (!pool) {
+      return res.json({
+        ok: true,
+        reply:
+          "Bhai, support ticket system ka database abhi available nahi hai. Thodi der baad try karo."
+      });
+    }
+
+    // -----------------------------------------------
+    // If a pending ticket already exists
+    // -----------------------------------------------
+
+    if (pendingTicket) {
+
+      const requiredProof =
+        pendingTicket.proof_type === "video"
+          ? "🎥 VIDEO"
+          : "📸 SCREENSHOT";
+
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: pendingTicket.proof_type,
+        reply:
+          `Bhai, aapka support request already pending hai.\n\n` +
+          `📋 Problem: ${pendingTicket.problem_summary}\n\n` +
+          `Is ticket ke liye ${requiredProof} proof chahiye.\n\n` +
+          `Please yahin AI Arena mein proof bhejo.`
+      });
+    }
+
+
+    // -----------------------------------------------
+    // Refresh latest profile
+    // -----------------------------------------------
+
     let currentFreeFireUid = freeFireUid;
     let currentFreeFireName = freeFireName;
     let currentUsername = username;
@@ -6990,57 +7107,71 @@ if (asksForTicket) {
     let currentEmail = email;
 
     try {
+
       const latestUserSnap = await firestore
         .collection("users")
         .doc(decoded.uid)
         .get();
 
       if (latestUserSnap.exists) {
-        const latestUser = latestUserSnap.data() || {};
 
-        currentFreeFireUid = String(
-          latestUser.freeFireUid ??
-          latestUser.freefireUid ??
-          latestUser.uid ??
-          currentFreeFireUid ??
-          ""
-        );
+        const latestUser =
+          latestUserSnap.data() || {};
 
-        currentFreeFireName = String(
-          latestUser.freeFireName ??
-          latestUser.freefireName ??
-          currentFreeFireName ??
-          ""
-        );
+        currentFreeFireUid =
+          String(
+            latestUser.freeFireUid ??
+            latestUser.freefireUid ??
+            latestUser.uid ??
+            currentFreeFireUid ??
+            ""
+          );
 
-        currentUsername = String(
-          latestUser.username ??
-          latestUser.name ??
-          currentUsername ??
-          ""
-        );
+        currentFreeFireName =
+          String(
+            latestUser.freeFireName ??
+            latestUser.freefireName ??
+            currentFreeFireName ??
+            ""
+          );
 
-        currentMobile = String(
-          latestUser.mobile ??
-          latestUser.phone ??
-          currentMobile ??
-          ""
-        );
+        currentUsername =
+          String(
+            latestUser.username ??
+            latestUser.name ??
+            currentUsername ??
+            ""
+          );
 
-        currentEmail = String(
-          latestUser.email ??
-          currentEmail ??
-          ""
-        );
+        currentMobile =
+          String(
+            latestUser.mobile ??
+            latestUser.phone ??
+            currentMobile ??
+            ""
+          );
+
+        currentEmail =
+          String(
+            latestUser.email ??
+            currentEmail ??
+            ""
+          );
       }
+
     } catch (profileRefreshError) {
+
       console.error(
         "AI Arena latest profile refresh error:",
         profileRefreshError
       );
     }
 
-    // Understand the actual problem from the complete user conversation.
+
+    // -----------------------------------------------
+    // Understand actual problem
+    // -----------------------------------------------
+
     const aiSupportSummary =
       await generateAISupportSummary(
         safeHistory,
@@ -7055,126 +7186,365 @@ if (asksForTicket) {
       aiSupportSummary.description ||
       "User has reported a support issue through AI Arena. The support team is requested to review and assist the user.";
 
-    const ticketId =
-  "AI-" +
-  Date.now() +
-  "-" +
-  Math.floor(100 + Math.random() * 900);
 
-    const proofType = getProofType(
-      "AI ARENA",
-      problemSummary,
-      description
+    // -----------------------------------------------
+    // Decide screenshot or video
+    // -----------------------------------------------
+
+    const proofType =
+      getProofType(
+        "AI ARENA",
+        problemSummary,
+        description
+      );
+
+
+    // -----------------------------------------------
+    // Save pending ticket in Neon
+    // -----------------------------------------------
+
+    await pool.query(
+      `
+      INSERT INTO ai_arena_pending_tickets (
+        user_id,
+        email,
+        username,
+        free_fire_uid,
+        free_fire_name,
+        problem_summary,
+        description,
+        proof_type,
+        status
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'proof_required')
+      `,
+      [
+        decoded.uid,
+        currentEmail || "",
+        currentUsername || "",
+        currentFreeFireUid || "",
+        currentFreeFireName || "",
+        problemSummary,
+        description,
+        proofType
+      ]
     );
 
-     const supportMessage = "🎫 NEW SUPPORT TICKET\n\n" +
-  "━━━━━━━━━━━━━━━━━━\n" +
-  "🆔 Ticket ID: " + ticketId + "\n\n" +
-  "👤 USER DETAILS\n\n" +
-  "UID: " + (currentFreeFireUid || "N/A") + "\n" +
-  "Free Fire Name: " + (currentFreeFireName || "N/A") + "\n" +
-  "Username: " + (currentUsername || "N/A") + "\n" +
-  "Mobile: " + (currentMobile || "N/A") + "\n" +
-  "Email: " + (currentEmail || "N/A") + "\n\n" +
-  "━━━━━━━━━━━━━━━━━━\n" +
-  "📋 TICKET DETAILS\n\n" +
-  "Category: AI ARENA\n" +
-  "Tournament ID: N/A\n\n" +
-  "Problem:\n" +
-  problemSummary + "\n\n" +
-  "Description:\n" +
-  description + "\n\n" +
-  "━━━━━━━━━━━━━━━━━━\n" +
-  (proofType === "video"
-    ? "🎥 Required Proof: VIDEO"
-    : "📸 Required Proof: SCREENSHOT") +
-  "\n\n" +
-  "The user will be asked for this proof in Telegram.\n\n" +
-  "⚡ BATTLE X7 ARENA SUPPORT";
+
+    const proofMessage =
+      proofType === "video"
+        ? "🎥 Is problem ke liye VIDEO proof required hai."
+        : "📸 Is problem ke liye SCREENSHOT proof required hai.";
+
+
+    return res.json({
+      ok: true,
+      ticketState: "proof_required",
+      proofType,
+      reply:
+        `Samajh gaya bhai. Main complaint register karne ke liye ready hoon.\n\n` +
+        `📋 Problem: ${problemSummary}\n\n` +
+        `${proofMessage}\n\n` +
+        `Please proof yahin AI Arena mein bhejo.\n\n` +
+        `⚠️ Proof milne ke baad main aapse final confirmation loonga.`
+    });
+  }
+
+
+  // ========================================================
+  // CASE 2 — USER SENDS SCREENSHOT / VIDEO
+  // ========================================================
+
+  if (
+    pendingTicket &&
+    (
+      (attachmentType === "image" && images[0]) ||
+      (attachmentType === "video" && video)
+    )
+  ) {
+
+    const expectedType =
+      pendingTicket.proof_type;
+
+    // Wrong proof type
+    if (
+      expectedType === "image" &&
+      attachmentType !== "image"
+    ) {
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "image",
+        reply:
+          "Bhai, is issue ke liye 📸 SCREENSHOT proof required hai. Please screenshot bhejo."
+      });
+    }
+
+    if (
+      expectedType === "video" &&
+      attachmentType !== "video"
+    ) {
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "video",
+        reply:
+          "Bhai, is issue ke liye 🎥 VIDEO proof required hai. Please video proof bhejo."
+      });
+    }
+
+
+    // -----------------------------------------------
+    // Save proof in Neon
+    // -----------------------------------------------
+
+    const proofData =
+      attachmentType === "image"
+        ? images[0]
+        : video;
+
+    const proofMime =
+      attachmentType === "image"
+        ? "image/jpeg"
+        : "video/mp4";
+
+
+    await pool.query(
+      `
+      UPDATE ai_arena_pending_tickets
+      SET
+        proof_data = $1,
+        proof_mime_type = $2,
+        status = 'confirmation_required',
+        updated_at = NOW()
+      WHERE id = $3
+      `,
+      [
+        proofData,
+        proofMime,
+        pendingTicket.id
+      ]
+    );
+
+
+    return res.json({
+      ok: true,
+      ticketState: "confirmation_required",
+      proofType: pendingTicket.proof_type,
+      reply:
+        `✅ Proof receive ho gaya bhai.\n\n` +
+        `📋 Problem: ${pendingTicket.problem_summary}\n\n` +
+        `Ab ticket create karne ke liye final confirmation chahiye.\n\n` +
+        `Kya main ye support ticket create karke support team ko bhej du?\n\n` +
+        `👉 Haan / Yes`
+    });
+  }
+
+
+  // ========================================================
+  // CASE 3 — FINAL CONFIRMATION
+  // ========================================================
+
+  if (
+    pendingTicket &&
+    pendingTicket.status === "confirmation_required" &&
+    confirmsTicket
+  ) {
+
+    // -----------------------------------------------
+    // Generate actual ticket ID only now
+    // -----------------------------------------------
+
+    const ticketId =
+      "AI-" +
+      Date.now() +
+      "-" +
+      Math.floor(100 + Math.random() * 900);
+
+
+    const proofType =
+      pendingTicket.proof_type;
+
+
+    const supportMessage =
+      "🎫 NEW SUPPORT TICKET\n\n" +
+      "━━━━━━━━━━━━━━━━━━\n" +
+      "🆔 Ticket ID: " +
+      ticketId +
+      "\n\n" +
+
+      "👤 USER DETAILS\n\n" +
+      "UID: " +
+      (pendingTicket.free_fire_uid || "N/A") +
+      "\n" +
+
+      "Free Fire Name: " +
+      (pendingTicket.free_fire_name || "N/A") +
+      "\n" +
+
+      "Username: " +
+      (pendingTicket.username || "N/A") +
+      "\n" +
+
+      "Mobile: " +
+      (currentMobile || "N/A") +
+      "\n" +
+
+      "Email: " +
+      (pendingTicket.email || "N/A") +
+      "\n\n" +
+
+      "━━━━━━━━━━━━━━━━━━\n" +
+
+      "📋 TICKET DETAILS\n\n" +
+
+      "Category: AI ARENA\n" +
+      "Tournament ID: N/A\n\n" +
+
+      "Problem:\n" +
+      pendingTicket.problem_summary +
+      "\n\n" +
+
+      "Description:\n" +
+      pendingTicket.description +
+      "\n\n" +
+
+      "━━━━━━━━━━━━━━━━━━\n" +
+
+      (
+        proofType === "video"
+          ? "🎥 Proof: VIDEO ATTACHED"
+          : "📸 Proof: SCREENSHOT ATTACHED"
+      ) +
+
+      "\n\n" +
+
+      "⚡ BATTLE X7 ARENA SUPPORT";
+
 
     let telegramResult;
 
-if (
-    attachmentType === "image" &&
-    images[0]
-) {
-    telegramResult =
+
+    // -----------------------------------------------
+    // Send proof + ticket details to Telegram
+    // -----------------------------------------------
+
+    if (
+      proofType === "screenshot" &&
+      pendingTicket.proof_data
+    ) {
+
+      telegramResult =
         await telegramMultipart(
-            "sendPhoto",
-            {
-                chat_id: CHAT_ID,
-                caption:
-                    supportMessage.slice(0, 1000)
-            },
-            "photo",
-            images[0],
-            "ai-arena-proof.jpg",
+          "sendPhoto",
+          {
+            chat_id: CHAT_ID,
+            caption:
+              supportMessage.slice(0, 1000)
+          },
+          "photo",
+          pendingTicket.proof_data,
+          "ai-arena-proof.jpg",
+          pendingTicket.proof_mime_type ||
             "image/jpeg"
         );
-} else if (
-    attachmentType === "video" &&
-    video
-) {
-    telegramResult =
+
+    } else if (
+      proofType === "video" &&
+      pendingTicket.proof_data
+    ) {
+
+      telegramResult =
         await telegramMultipart(
-            "sendVideo",
-            {
-                chat_id: CHAT_ID,
-                caption:
-                    supportMessage.slice(0, 1000)
-            },
-            "video",
-            video,
-            "ai-arena-proof.mp4",
+          "sendVideo",
+          {
+            chat_id: CHAT_ID,
+            caption:
+              supportMessage.slice(0, 1000)
+          },
+          "video",
+          pendingTicket.proof_data,
+          "ai-arena-proof.mp4",
+          pendingTicket.proof_mime_type ||
             "video/mp4"
         );
-} else {
-    telegramResult =
-        await telegram(
-            "sendMessage",
-            {
-                chat_id: CHAT_ID,
-                text: supportMessage
-            }
-        );
-}
+
+    } else {
+
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType,
+        reply:
+          "Bhai, proof abhi available nahi hai. Please required screenshot/video dobara bhejo."
+      });
+    }
 
 
-if (!telegramResult?.ok) {
-    throw new Error(
+    if (!telegramResult?.ok) {
+
+      throw new Error(
         telegramResult?.description ||
         "Telegram ticket send failed"
+      );
+    }
+
+
+    // -----------------------------------------------
+    // Telegram deep link
+    // -----------------------------------------------
+
+    const prefix =
+      proofType === "video"
+        ? "v_"
+        : "p_";
+
+    const telegramUrl =
+      `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
+
+
+    // -----------------------------------------------
+    // IMPORTANT:
+    // Pending ticket remove only AFTER Telegram success
+    // -----------------------------------------------
+
+    await pool.query(
+      `
+      DELETE FROM ai_arena_pending_tickets
+      WHERE id = $1
+      `,
+      [pendingTicket.id]
     );
-}
 
-const prefix =
-  proofType === "video" ? "v_" : "p_";
 
-const telegramUrl =
-  `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
+    return res.json({
+      ok: true,
+      ticketState: "created",
+      ticketId,
+      telegramUrl,
 
-return res.json({
-  ok: true,
-  reply:
-    `✅ Support ticket create ho gaya.\n\n` +
-    `🎫 Ticket ID: #${ticketId}\n\n` +
-    `Aapki problem support team ko bhej di gayi hai.\n\n` +
-    `Open Ticket in Telegram: ${telegramUrl}`
-});
+      reply:
+        `✅ Support ticket create ho gaya.\n\n` +
+        `🎫 Ticket ID: #${ticketId}\n\n` +
+        `Aapki problem aur proof support team ko Telegram par bhej diya gaya hai.\n\n` +
+        `Support team ab aapki complaint review karegi.`
+    });
+  }
 
 } catch (ticketError) {
+
   console.error(
-    "AI Arena support ticket error:",
+    "AI Arena persistent support ticket error:",
     ticketError
   );
 
   return res.status(500).json({
     ok: false,
-    error: "Support ticket create nahi ho saka."
+    error:
+      "Support ticket process nahi ho saka. Please thodi der baad try karo."
   });
 }
-}
-  
+    
 // ==========================================================
 // AI SUPPORT TICKET — INTELLIGENT PROBLEM + DESCRIPTION
 // ==========================================================
