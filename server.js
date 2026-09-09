@@ -1478,7 +1478,6 @@ app.post(
   }
 );
 
-
 // ============================================================
 // REFERRAL REWARD
 // ============================================================
@@ -1675,7 +1674,6 @@ async function creditReferralReward(
   );
 }
 
-
 // ============================================================
 // DEPOSIT + WITHDRAWAL SYSTEM
 // ============================================================
@@ -1735,7 +1733,6 @@ async function initWalletDatabase() {
     "Wallet database initialization complete"
   );
 }
-
 
 // ------------------------------------------------------------
 // DEPOSIT REQUEST
@@ -1889,7 +1886,6 @@ app.post(
     }
   }
 );
-
 
 // ------------------------------------------------------------
 // WITHDRAWAL REQUEST
@@ -2110,7 +2106,6 @@ app.post(
   }
 );
 
-
 // ------------------------------------------------------------
 // USER DEPOSIT HISTORY
 // ------------------------------------------------------------
@@ -2176,7 +2171,6 @@ app.get(
     }
   }
 );
-
 
 // ------------------------------------------------------------
 // USER WITHDRAWAL HISTORY
@@ -2264,7 +2258,6 @@ app.get(
   }
 );
 
-
 // ------------------------------------------------------------
 // INITIALIZE WALLET DATABASE
 // ------------------------------------------------------------
@@ -2280,7 +2273,6 @@ initWalletDatabase()
 
     }
   );
-
 
 // ============================================================
 // REAL PAID MATCH
@@ -2839,7 +2831,6 @@ app.post(
   }
 );
 
-
 // ============================================================
 // 5-MIN ROOM UNLOCK + JOINED-USER-ONLY ROOM
 // ============================================================
@@ -2879,7 +2870,6 @@ async function requireAdmin(req, res) {
 
   return decoded;
 }
-
 
 // ============================================================
 // CREATE / UPDATE ROOM
@@ -3000,7 +2990,6 @@ app.post("/room/create", async (req, res) => {
     });
   }
 });
-
 
 // ============================================================
 // ROOM ACCESS
@@ -3270,7 +3259,6 @@ app.get(
   }
 );
 
-
 // ============================================================
 // MANUAL ROOM UNLOCK
 // ADMIN ONLY
@@ -3349,7 +3337,6 @@ app.post(
     }
   }
 );
-
 
 // ============================================================
 // SMART SUNDAY MEMORY
@@ -3592,7 +3579,6 @@ app.delete(
   }
 );
 
-
 // ============================================================
 // REMOTE THEME CONTROL
 // ============================================================
@@ -3624,7 +3610,6 @@ const DEFAULT_THEME_CONFIG = {
 
   updatedBy: null
 };
-
 
 // ------------------------------------------------------------
 // GET REMOTE THEME
@@ -3691,7 +3676,6 @@ app.get("/theme", async (req, res) => {
 
 });
 
-
 // ------------------------------------------------------------
 // ADMIN AUTHENTICATION
 // ------------------------------------------------------------
@@ -3741,7 +3725,6 @@ async function requireAdmin(req, res) {
 
 }
 
-
 // ------------------------------------------------------------
 // UPDATE REMOTE THEME
 // ADMIN ONLY
@@ -3774,7 +3757,6 @@ app.post("/admin/theme", async (req, res) => {
     const body =
       req.body || {};
 
-
     // --------------------------------------------------------
     // BACKGROUND TYPE
     // --------------------------------------------------------
@@ -3805,7 +3787,6 @@ app.post("/admin/theme", async (req, res) => {
 
     }
 
-
     // --------------------------------------------------------
     // BACKGROUND IMAGE URL
     // --------------------------------------------------------
@@ -3816,7 +3797,6 @@ app.post("/admin/theme", async (req, res) => {
         ""
       ).trim();
 
-
     // --------------------------------------------------------
     // BACKGROUND COLOR
     // --------------------------------------------------------
@@ -3826,7 +3806,6 @@ app.post("/admin/theme", async (req, res) => {
         body.backgroundColor ||
         "#070B14"
       ).trim();
-
 
     // --------------------------------------------------------
     // IMAGE SIZE
@@ -3850,7 +3829,6 @@ app.post("/admin/theme", async (req, res) => {
           )
         : "cover";
 
-
     // --------------------------------------------------------
     // IMAGE POSITION
     // --------------------------------------------------------
@@ -3860,7 +3838,6 @@ app.post("/admin/theme", async (req, res) => {
         body.backgroundPosition ||
         "center"
       ).trim();
-
 
     // --------------------------------------------------------
     // REPEAT
@@ -3872,7 +3849,6 @@ app.post("/admin/theme", async (req, res) => {
         "no-repeat"
       ).trim();
 
-
     // --------------------------------------------------------
     // ATTACHMENT
     // --------------------------------------------------------
@@ -3882,7 +3858,6 @@ app.post("/admin/theme", async (req, res) => {
         body.backgroundAttachment ||
         "fixed"
       ).trim();
-
 
     // --------------------------------------------------------
     // OVERLAY
@@ -3925,14 +3900,12 @@ app.post("/admin/theme", async (req, res) => {
         )
       );
 
-
     // --------------------------------------------------------
     // THEME ENABLED
     // --------------------------------------------------------
 
     const enabled =
       body.enabled !== false;
-
 
     // --------------------------------------------------------
     // SAVE TO FIRESTORE
@@ -4029,7 +4002,6 @@ app.post("/admin/theme", async (req, res) => {
 
 });
 
-
 // ------------------------------------------------------------
 // RESET REMOTE THEME
 // ADMIN ONLY
@@ -4114,7 +4086,6 @@ app.post(
 
   }
 );
-
 
 // ============================================================
 // REMOTE ICON CONTROL + MASTER ADMIN CONTROL
@@ -4656,7 +4627,6 @@ app.get(
   }
 );
 
-
 // ============================================================
 // TELEGRAM HELPERS
 // ============================================================
@@ -4753,6 +4723,7 @@ async function ensureAIArenaPendingTicketsTable() {
     CREATE TABLE IF NOT EXISTS ai_arena_pending_tickets (
       id BIGSERIAL PRIMARY KEY,
       user_id TEXT NOT NULL,
+      conversation_id TEXT,
       email TEXT,
       username TEXT,
       free_fire_uid TEXT,
@@ -4772,26 +4743,32 @@ async function ensureAIArenaPendingTicketsTable() {
     )
   `);
 
+    await pool.query(`
+    ALTER TABLE ai_arena_pending_tickets
+    ADD COLUMN IF NOT EXISTS conversation_id TEXT
+  `);
+
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_ai_arena_pending_user
-    ON ai_arena_pending_tickets(user_id)
+    CREATE INDEX IF NOT EXISTS idx_ai_arena_pending_conversation
+    ON ai_arena_pending_tickets(user_id, conversation_id, status)
   `);
 }
 
 
-async function getPendingAIArenaTicket(userId) {
-  if (!pool || !userId) return null;
+async function getPendingAIArenaTicket(userId, conversationId) {
+  if (!pool || !userId || !conversationId) return null;
 
   const result = await pool.query(
     `
     SELECT *
     FROM ai_arena_pending_tickets
     WHERE user_id = $1
+      AND conversation_id = $2
       AND status IN ('proof_required', 'confirmation_required')
     ORDER BY updated_at DESC
     LIMIT 1
     `,
-    [userId]
+    [userId, conversationId]
   );
 
   return result.rows[0] || null;
@@ -6435,7 +6412,9 @@ const email =
 let recentTransactions = [];
 
 try {
+  
   // DEPOSITS
+  
   const recentDepositSnap = await firestore
     .collection("depositRequests")
     .where("userId", "==", decoded.uid)
@@ -6458,6 +6437,7 @@ try {
   });
 
   // WITHDRAWALS
+  
   const recentWithdrawSnap = await firestore
     .collection("withdrawRequests")
     .where("userId", "==", decoded.uid)
@@ -6480,6 +6460,7 @@ try {
   });
 
   // TOURNAMENT JOIN / ENTRY
+  
   const recentJoinSnap = await firestore
     .collection("joinRequests")
     .where("userId", "==", decoded.uid)
@@ -6511,6 +6492,7 @@ try {
     }
 
     // EARNING ONLY
+    
     const earning = Number(
       data.winningsAmount ??
       data.prizeWon ??
@@ -6536,11 +6518,13 @@ try {
   });
 
   // LATEST FIRST
+  
   recentTransactions.sort((a, b) => {
     return new Date(b.date).getTime() - new Date(a.date).getTime();
   });
 
   // ONLY LATEST 20
+  
   recentTransactions = recentTransactions.slice(0, 20);
 
   console.log(
@@ -6558,13 +6542,16 @@ try {
 // ----------------------------------------------------------
 // LOAD USER DEPOSITS + WITHDRAWALS FOR AI ARENA
 // ----------------------------------------------------------
+    
 let aiDeposits = [];
 let aiWithdrawals = [];
 
 try {
+  
   // -------------------------
   // DEPOSIT HISTORY
   // -------------------------
+  
   const depositSnap = await firestore
     .collection("depositRequests")
     .where("userId", "==", decoded.uid)
@@ -6584,6 +6571,7 @@ try {
   // -------------------------
   // WITHDRAWAL HISTORY
   // -------------------------
+  
   const withdrawSnap = await firestore
     .collection("withdrawRequests")
     .where("userId", "==", decoded.uid)
@@ -6620,6 +6608,7 @@ try {
 // ----------------------------------------------------------
 // LOAD USER TOURNAMENT EARNINGS FOR AI ARENA
 // ----------------------------------------------------------
+    
 let tournamentEarnings = [];
 let totalTournamentEarning = 0;
 
@@ -6687,6 +6676,7 @@ try {
 // ----------------------------------------------------------
 // LOAD LOGGED-IN USER'S JOINED TOURNAMENTS FOR AI ARENA
 // ----------------------------------------------------------
+    
 let joinedTournaments = [];
 
 try {
@@ -6774,9 +6764,10 @@ try {
   );
 }
 
-    // ----------------------------------------------------------
+// ----------------------------------------------------------
 // LOAD LOGGED-IN USER REFERRAL DATA FOR AI ARENA
 // ----------------------------------------------------------
+    
 let aiReferralData = [];
 let aiReferralSummary = {
   totalReferrals: 0,
@@ -6861,6 +6852,7 @@ try {
 // ----------------------------------------------------------
 // LOAD LIVE TOURNAMENT DATA FOR AI ARENA
 // ----------------------------------------------------------
+    
 let liveTournaments = [];
 
 try {
@@ -6929,6 +6921,7 @@ console.log("AI ARENA TOURNAMENT DATA:", liveTournaments);
     // ----------------------------------------------------------
     // LOAD LOGGED-IN USER TOURNAMENT EARNING
     // ----------------------------------------------------------
+    
     let totalEarning = 0;
 
     try {
@@ -6961,6 +6954,11 @@ console.log("AI ARENA TOURNAMENT DATA:", liveTournaments);
   
 const message =
     String(req.body?.message || "").trim();
+
+    const conversationId =
+    typeof req.body?.conversationId === "string"
+        ? req.body.conversationId.trim()
+        : "";
 
 const attachmentType =
     req.body?.attachmentType === "video"
@@ -7054,10 +7052,12 @@ try {
   // --------------------------------------------------------
 
   const pendingTicket =
-    pool && decoded?.uid
-      ? await getPendingAIArenaTicket(decoded.uid)
+    pool && decoded?.uid && conversationId
+      ? await getPendingAIArenaTicket(
+          decoded.uid,
+          conversationId
+        )
       : null;
-
 
   // ========================================================
   // CASE 1 — USER ASKS TO CREATE A TICKET
@@ -7206,28 +7206,30 @@ try {
     await pool.query(
       `
       INSERT INTO ai_arena_pending_tickets (
-        user_id,
-        email,
-        username,
-        free_fire_uid,
-        free_fire_name,
-        problem_summary,
-        description,
-        proof_type,
-        status
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'proof_required')
+  user_id,
+  conversation_id,
+  email,
+  username,
+  free_fire_uid,
+  free_fire_name,
+  problem_summary,
+  description,
+  proof_type,
+  status
+)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'proof_required')
       `,
       [
-        decoded.uid,
-        currentEmail || "",
-        currentUsername || "",
-        currentFreeFireUid || "",
-        currentFreeFireName || "",
-        problemSummary,
-        description,
-        proofType
-      ]
+  decoded.uid,
+  conversationId,
+  currentEmail || "",
+  currentUsername || "",
+  currentFreeFireUid || "",
+  currentFreeFireName || "",
+  problemSummary,
+  description,
+  proofType
+]
     );
 
 
@@ -7293,7 +7295,7 @@ try {
       });
     }
 
-    // -----------------------------------------------
+// -----------------------------------------------
 // AI PROOF VERIFICATION
 // -----------------------------------------------
 
@@ -7428,6 +7430,235 @@ or
       proofType: "image",
       reply:
         "Bhai, screenshot verification abhi complete nahi ho paayi. Please clear relevant screenshot dobara bhejo."
+    });
+  }
+}
+
+    // -----------------------------------------------
+// AI VIDEO PROOF VERIFICATION
+// -----------------------------------------------
+// Video proof ko AI se verify karta hai.
+// Existing PHOTO verification block ko delete/change mat karna.
+
+if (attachmentType === "video" && video) {
+
+  try {
+
+    const videoFrames = Array.isArray(images)
+      ? images
+          .filter(x => typeof x === "string" && x.trim())
+          .slice(0, 4)
+      : [];
+
+    // Video ke representative frames available nahi hain
+    if (!videoFrames.length) {
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "video",
+        proofRejected: true,
+        reply:
+          "❌ Bhai, video analyse nahi ho paaya.\n\n" +
+          "Please clear aur relevant video dobara bhejo."
+      });
+    }
+
+    const videoContent = [
+      {
+        type: "input_text",
+        text: `
+Analyze the submitted video evidence against the user's support complaint.
+
+Complaint:
+${pendingTicket.problem_summary}
+
+Description:
+${pendingTicket.description}
+
+IMPORTANT:
+The uploaded media is a VIDEO. The supplied images are representative
+frames taken from that video. Judge the evidence using the sequence and
+overall context of the frames, not just one isolated frame.
+
+Verification rules:
+
+1. Accept the video ONLY when the evidence is genuinely relevant to
+   the reported complaint.
+
+2. Reject unrelated videos such as:
+   - random gameplay
+   - home screen
+   - profile screen
+   - leaderboard
+   - settings
+   - gallery
+   - unrelated apps
+   - unrelated screens
+
+3. For withdrawal/payment complaints, look for evidence such as:
+   - wallet
+   - withdrawal
+   - transaction
+   - payment
+   - failed withdrawal
+   - pending withdrawal
+   - rejected transaction
+   - payment error
+   - related payment information
+
+4. For tournament/match complaints, look for evidence such as:
+   - tournament
+   - match
+   - room
+   - result
+   - score
+   - gameplay
+   - disconnection
+   - error
+   - relevant match information
+
+5. The video does NOT need to show every expected word.
+   Judge whether the visible evidence reasonably supports the complaint.
+
+6. Reject if the evidence is:
+   - blurry
+   - corrupted
+   - empty
+   - impossible to understand
+   - completely unrelated
+   - repetitive without useful evidence
+
+7. Never approve simply because a video was uploaded.
+
+8. If the evidence is uncertain or insufficient, reject it and ask for
+   a clearer relevant video.
+
+9. Return ONLY valid JSON in exactly this format:
+
+{
+  "valid": true,
+  "reason": "short reason"
+}
+
+OR
+
+{
+  "valid": false,
+  "reason": "short reason"
+}
+`
+      }
+    ];
+
+    // Representative video frames AI ko bhejo
+    for (const frame of videoFrames) {
+      videoContent.push({
+        type: "input_image",
+        image_url: frame
+      });
+    }
+
+    const videoCheckResponse =
+      await openai.responses.create({
+        model:
+          process.env.AI_ARENA_MODEL ||
+          "gpt-5.6-luna",
+
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "You are the AI video proof verification system for " +
+                  "BATTLE X7 ARENA. Strictly verify whether the submitted " +
+                  "video evidence is relevant to the user's complaint. " +
+                  "Do not approve unrelated or insufficient evidence."
+              }
+            ]
+          },
+          {
+            role: "user",
+            content: videoContent
+          }
+        ]
+      });
+
+    const videoCheckText =
+      videoCheckResponse.output_text || "";
+
+    let videoCheck;
+
+    try {
+      videoCheck = JSON.parse(videoCheckText);
+    } catch (parseError) {
+
+      console.error(
+        "AI video proof verification JSON parse error:",
+        parseError,
+        videoCheckText
+      );
+
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "video",
+        proofRejected: true,
+        reply:
+          "❌ Bhai, video proof verify nahi ho paaya.\n\n" +
+          "Please clear aur relevant video dobara bhejo."
+      });
+    }
+
+    // Video proof rejected
+    if (!videoCheck.valid) {
+
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "video",
+        proofRejected: true,
+
+        reply:
+          "❌ Bhai, ye video aapki complaint se related " +
+          "proof nahi lag raha.\n\n" +
+
+          "📋 Problem: " +
+          pendingTicket.problem_summary +
+          "\n\n" +
+
+          "🤖 AI Verification: " +
+          (videoCheck.reason ||
+            "Video complaint ko clearly support nahi karta.") +
+          "\n\n" +
+
+          "Please isi problem ko clearly dikhane wala " +
+          "video dobara bhejo."
+      });
+    }
+
+    // Video proof accepted
+    console.log(
+      "✅ AI video proof verification accepted:",
+      videoCheck.reason || "Relevant video proof"
+    );
+
+  } catch (videoVerificationError) {
+
+    console.error(
+      "AI video proof verification error:",
+      videoVerificationError
+    );
+
+    return res.json({
+      ok: true,
+      ticketState: "proof_required",
+      proofType: "video",
+      proofRejected: true,
+      reply:
+        "❌ Bhai, video verification complete nahi ho paayi.\n\n" +
+        "Please clear aur relevant video dobara bhejo."
     });
   }
 }
