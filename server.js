@@ -6277,13 +6277,12 @@ app.post("/api/ai/tts", async (req, res) => {
     const speech =
   await openai.audio.speech.create({
     model: "gpt-4o-mini-tts",
-
     voice: "coral",
-
-instructions:
-  language === "hi"
-    ? "Speak like a natural, friendly Indian female assistant having a real conversation with the user. Use a warm, pleasant and natural feminine speaking style. Do not sound robotic, mechanical, synthetic, or like a news reader. Use natural pauses, realistic sentence rhythm, gentle intonation and natural conversational expression. Speak clear Indian Hindi with excellent pronunciation. Keep the speed comfortable and easy to understand. Pronounce numbers, rupee amounts, tournament names and English words clearly and naturally. Never read emoji names, icon names, markdown symbols, URLs, or formatting symbols aloud."
-    : "Speak like a natural, friendly Indian female assistant having a real conversation with the user. Use a warm, pleasant and natural feminine speaking style. Do not sound robotic, mechanical, synthetic, or like a news reader. Use natural pauses, realistic sentence rhythm, gentle intonation and natural conversational expression. Speak clear Indian English with excellent pronunciation. Keep the speed comfortable and easy to understand. Pronounce numbers, rupee amounts, tournament names and English words clearly and naturally. Never read emoji names, icon names, markdown symbols, URLs, or formatting symbols aloud.",
+    input: text,
+    instructions:
+      language === "hi"
+        ? "Speak in a warm, natural Indian female conversational voice. Sound relaxed, friendly and expressive, like a real person having a normal conversation. Do not sound robotic, mechanical, artificial, overly formal, or like a news reader. Use natural pauses and sentence rhythm, with gentle changes in intonation. Speak at a comfortable, slightly slower pace so every word is clear. Pronounce Hindi words naturally and clearly, and pronounce English words and numbers naturally. Never read emoji names, icon names, markdown symbols, URLs, or formatting symbols aloud."
+        : "Speak in a warm, natural Indian female conversational voice. Sound relaxed, friendly and expressive, like a real person having a normal conversation. Do not sound robotic, mechanical, artificial, overly formal, or like a news reader. Use natural pauses and sentence rhythm, with gentle changes in intonation. Speak at a comfortable, slightly slower pace so every word is clear. Pronounce English words, numbers and tournament names naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs, or formatting symbols aloud.",
     response_format: "mp3"
   });
 
