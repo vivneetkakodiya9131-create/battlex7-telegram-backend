@@ -6275,16 +6275,20 @@ app.post("/api/ai/tts", async (req, res) => {
     }
 
     const speech =
-      await openai.audio.speech.create({
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
-        input: text,
-        instructions:
-          language === "hi"
-            ? "Speak naturally in clear Indian Hindi. Keep the pronunciation easy to understand."
-            : "Speak naturally in clear Indian English. Keep the pronunciation easy to understand.",
-        response_format: "mp3"
-      });
+  await openai.audio.speech.create({
+    model: "gpt-4o-mini-tts",
+
+    voice: "coral",
+
+    input: text,
+
+    instructions:
+      language === "hi"
+        ? "Speak as a friendly Indian female AI assistant. Speak in clear, natural Indian Hindi with excellent pronunciation. Use a warm, polite and confident feminine speaking style. Speak at a comfortable medium-slow speed with short natural pauses between sentences. Pronounce numbers, rupee amounts, tournament names and English words clearly. Do not speak emoji names, icon names, markdown symbols, URLs, or formatting symbols."
+        : "Speak as a friendly Indian female AI assistant. Speak in clear, natural Indian English with excellent pronunciation. Use a warm, polite and confident feminine speaking style. Speak at a comfortable medium-slow speed with short natural pauses between sentences. Pronounce numbers, rupee amounts, tournament names and English words clearly. Do not speak emoji names, icon names, markdown symbols, URLs, or formatting symbols.",
+
+    response_format: "mp3"
+  });
 
     const buffer =
       Buffer.from(
