@@ -7017,6 +7017,8 @@ if (
 
 const normalizedMessage = message.toLowerCase();
 
+let currentMobile = mobile;
+    
 const explicitTicketRequest =
   /\b(ticket|support ticket|complaint|complain)\b/.test(
     normalizedMessage
@@ -7103,7 +7105,6 @@ try {
     let currentFreeFireUid = freeFireUid;
     let currentFreeFireName = freeFireName;
     let currentUsername = username;
-    let currentMobile = mobile;
     let currentEmail = email;
 
     try {
