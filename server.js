@@ -7293,7 +7293,145 @@ try {
       });
     }
 
+    // -----------------------------------------------
+// AI PROOF VERIFICATION
+// -----------------------------------------------
 
+if (attachmentType === "image" && images[0]) {
+
+  try {
+
+    const proofImage = images[0];
+
+    const proofCheckResponse =
+      await openai.responses.create({
+        model:
+          process.env.AI_ARENA_MODEL ||
+          "gpt-5.6-luna",
+
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  `You are the proof verification AI for BATTLE X7 ARENA.
+
+Your job is to check whether the user's uploaded screenshot is genuinely relevant to the user's support complaint.
+
+You MUST compare the screenshot with the complaint.
+
+Complaint:
+${pendingTicket.problem_summary}
+
+Description:
+${pendingTicket.description}
+
+Rules:
+
+1. Accept the screenshot ONLY if it appears relevant to the complaint.
+2. Random screenshots such as home screen, profile, leaderboard, unrelated settings, gallery, or unrelated apps must be rejected.
+3. If the complaint is about withdrawal/payment, look for relevant withdrawal, transaction, payment, wallet or related information.
+4. If the complaint is about tournament/match problems, look for relevant tournament, match, result, room, score or related information.
+5. Do not require every expected word to be visible. Use the overall visual context.
+6. If the screenshot is too blurry, empty, corrupted, or impossible to understand, reject it.
+7. Never accept a screenshot merely because it is an image.
+8. Return ONLY valid JSON in this exact format:
+
+{
+  "valid": true,
+  "reason": "short reason"
+}
+
+or
+
+{
+  "valid": false,
+  "reason": "short reason"
+}` 
+              }
+            ]
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "Analyze this screenshot against the complaint and decide whether it is valid proof."
+              },
+              {
+                type: "input_image",
+                image_url: proofImage
+              }
+            ]
+          }
+        ]
+      });
+
+    const proofCheckText =
+      proofCheckResponse.output_text || "";
+
+    let proofCheck;
+
+    try {
+      proofCheck =
+        JSON.parse(proofCheckText);
+    } catch (parseError) {
+
+      console.error(
+        "AI proof verification JSON parse error:",
+        parseError,
+        proofCheckText
+      );
+
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "image",
+        reply:
+          "Bhai, screenshot ko verify nahi kar paaya. Please complaint ka clear aur relevant screenshot dobara bhejo."
+      });
+    }
+
+    if (!proofCheck.valid) {
+
+      return res.json({
+        ok: true,
+        ticketState: "proof_required",
+        proofType: "image",
+        proofRejected: true,
+        reply:
+          `❌ Bhai, ye screenshot aapki complaint se related proof nahi lag raha.\n\n` +
+          `📋 Problem: ${pendingTicket.problem_summary}\n\n` +
+          `AI verification: ${proofCheck.reason || "Screenshot relevant nahi hai."}\n\n` +
+          `Please isi problem se related clear screenshot dobara bhejo.`
+      });
+    }
+
+    console.log(
+      "AI proof verification accepted:",
+      proofCheck.reason
+    );
+
+  } catch (proofVerificationError) {
+
+    console.error(
+      "AI proof verification error:",
+      proofVerificationError
+    );
+
+    return res.json({
+      ok: true,
+      ticketState: "proof_required",
+      proofType: "image",
+      reply:
+        "Bhai, screenshot verification abhi complete nahi ho paayi. Please clear relevant screenshot dobara bhejo."
+    });
+  }
+}
+  
     // -----------------------------------------------
     // Save proof in Neon
     // -----------------------------------------------
