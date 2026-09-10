@@ -6289,7 +6289,7 @@ app.post("/auth/password/reset", async (req, res) => {
 
 // ============================================================
 // AI ARENA TEXT-TO-SPEECH API
-// Server-side OpenAI TTS for Android/WebView
+// Server-side Gemini TTS - Kore Voice
 // ============================================================
 
 app.post("/api/ai/tts", async (req, res) => {
@@ -6318,47 +6318,71 @@ app.post("/api/ai/tts", async (req, res) => {
       });
     }
 
-    if (!openai) {
+    if (!gemini) {
       return res.status(503).json({
         ok: false,
-        error: "OpenAI is not configured"
+        error: "Gemini is not configured"
       });
     }
 
-    const speech =
-      await openai.audio.speech.create({
-        model: "gpt-4o-mini-tts",
+    const instruction =
+      language === "hi"
+        ? "Warm, sweet and melodious Hindi female voice. Natural Indian Hindi pronunciation, calm but energetic gaming-announcer style, confident and friendly tone, clear speech, expressive emotions, smooth pacing, with slight excitement during important lines. Professional, cinematic and engaging. Speak naturally and conversationally. Do not sound robotic or mechanical. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud."
+        : "Warm, sweet and melodious Indian female voice. Natural Indian English pronunciation, calm but energetic gaming-announcer style, confident and friendly tone, clear speech, expressive emotions, smooth pacing, with slight excitement during important lines. Professional, cinematic and engaging. Speak naturally and conversationally. Do not sound robotic or mechanical. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud.";
 
-        // Friendly female-style voice
-        voice: "shimmer",
+    const promptText =
+      `[${instruction}]:\n${text}`;
 
-        input: text,
+    const response =
+      await gemini.models.generateContent({
+        model: "gemini-3.1-flash-tts-preview",
 
-        instructions:
-          language === "hi"
-            ? "Speak as a warm, friendly young Indian female support assistant. Sound natural, soft, cheerful, caring and conversational, like a real person talking naturally to a user. Avoid any robotic, mechanical, synthetic, monotone, news-reader or overly formal style. Use natural pauses, breathing-like rhythm, gentle emotional expression and natural changes in pitch and intonation. Speak at a comfortable, slightly slower pace so every word is clear. Use natural Indian Hindi and Hinglish pronunciation. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Keep the tone friendly and reassuring, but do not exaggerate emotions. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud."
+        contents: [
+          {
+            parts: [
+              {
+                text: promptText
+              }
+            ]
+          }
+        ],
 
-            : "Speak as a warm, friendly young Indian female support assistant. Sound natural, soft, cheerful, caring and conversational, like a real person talking naturally to a user. Avoid any robotic, mechanical, synthetic, monotone, news-reader or overly formal style. Use natural pauses, breathing-like rhythm, gentle emotional expression and natural changes in pitch and intonation. Speak at a comfortable, slightly slower pace so every word is clear. Use natural Indian English pronunciation. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Keep the tone friendly and reassuring, but do not exaggerate emotions. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud.",
+        config: {
+          responseModalities: ["AUDIO"],
 
-        response_format: "mp3"
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: "Kore"
+              }
+            }
+          }
+        }
       });
 
-    const buffer =
-      Buffer.from(
-        await speech.arrayBuffer()
-      );
+    const audioData =
+      response
+        .candidates?.[0]
+        ?.content?.parts?.[0]
+        ?.inlineData?.data;
+
+    if (!audioData) {
+      return res.status(500).json({
+        ok: false,
+        error: "Gemini did not return audio"
+      });
+    }
 
     return res.json({
       ok: true,
-      mimeType: "audio/mpeg",
-      audioBase64:
-        buffer.toString("base64")
+      mimeType: "audio/pcm",
+      audioBase64: audioData
     });
 
   } catch (error) {
 
     console.error(
-      "AI Arena TTS error:",
+      "AI Arena Gemini TTS error:",
       error
     );
 
