@@ -6591,15 +6591,27 @@ let aiWithdrawals = [];
 try {
   
   // -------------------------
+  // LOAD BOTH HISTORIES IN PARALLEL
+  // -------------------------
+  
+  const [depositSnap, withdrawSnap] = await Promise.all([
+    firestore
+      .collection("depositRequests")
+      .where("userId", "==", decoded.uid)
+      .limit(50)
+      .get(),
+
+    firestore
+      .collection("withdrawRequests")
+      .where("userId", "==", decoded.uid)
+      .limit(50)
+      .get()
+  ]);
+
+  // -------------------------
   // DEPOSIT HISTORY
   // -------------------------
   
-  const depositSnap = await firestore
-    .collection("depositRequests")
-    .where("userId", "==", decoded.uid)
-    .limit(50)
-    .get();
-
   depositSnap.forEach((doc) => {
     const data = doc.data() || {};
 
@@ -6614,12 +6626,6 @@ try {
   // WITHDRAWAL HISTORY
   // -------------------------
   
-  const withdrawSnap = await firestore
-    .collection("withdrawRequests")
-    .where("userId", "==", decoded.uid)
-    .limit(50)
-    .get();
-
   withdrawSnap.forEach((doc) => {
     const data = doc.data() || {};
 
