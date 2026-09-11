@@ -6446,6 +6446,7 @@ app.post("/api/ai/chat", async (req, res) => {
   try {
 
     // User must be logged in with Firebase
+    
     const decoded = await requireFirebaseUser(req, res);
 
 if (!decoded) return;
@@ -6481,137 +6482,103 @@ const walletBalance =
 const email =
     String(userProfile.email || "").trim();
 
-// ----------------------------------------------------------
 // LOAD RECENT WALLET TRANSACTIONS FOR AI ARENA
-// ----------------------------------------------------------
 let recentTransactions = [];
 
 try {
-  
-  // DEPOSITS
-  
-  const recentDepositSnap = await firestore
-    .collection("depositRequests")
-    .where("userId", "==", decoded.uid)
-    .limit(50)
-    .get();
+  const [
+    recentDepositSnap,
+    recentWithdrawSnap,
+    recentJoinSnap
+  ] = await Promise.all([
+    firestore
+      .collection("depositRequests")
+      .where("uid", "==", decoded.uid)
+      .limit(20)
+      .get(),
 
-  recentDepositSnap.forEach((doc) => {
+    firestore
+      .collection("withdrawRequests")
+      .where("uid", "==", decoded.uid)
+      .limit(20)
+      .get(),
+
+    firestore
+      .collection("joinRequests")
+      .where("uid", "==", decoded.uid)
+      .limit(20)
+      .get()
+  ]);
+
+  recentDepositSnap.forEach(doc => {
     const data = doc.data() || {};
-
-    const createdAt = data.createdAt?.toDate
-      ? data.createdAt.toDate().toISOString()
-      : String(data.createdAt || "");
 
     recentTransactions.push({
       type: "deposit",
       amount: Number(data.amount || 0),
-      status: String(data.status || "pending"),
-      date: createdAt
+      status: String(data.status || ""),
+      createdAt: data.createdAt || null,
+      ...data
     });
   });
 
-  // WITHDRAWALS
-  
-  const recentWithdrawSnap = await firestore
-    .collection("withdrawRequests")
-    .where("userId", "==", decoded.uid)
-    .limit(50)
-    .get();
-
-  recentWithdrawSnap.forEach((doc) => {
+  recentWithdrawSnap.forEach(doc => {
     const data = doc.data() || {};
-
-    const createdAt = data.createdAt?.toDate
-      ? data.createdAt.toDate().toISOString()
-      : String(data.createdAt || "");
 
     recentTransactions.push({
-      type: "withdrawal",
+      type: "withdraw",
       amount: Number(data.amount || 0),
-      status: String(data.status || "pending"),
-      date: createdAt
+      status: String(data.status || ""),
+      createdAt: data.createdAt || null,
+      ...data
     });
   });
 
-  // TOURNAMENT JOIN / ENTRY
-  
-  const recentJoinSnap = await firestore
-    .collection("joinRequests")
-    .where("userId", "==", decoded.uid)
-    .limit(50)
-    .get();
-
-  recentJoinSnap.forEach((doc) => {
+  recentJoinSnap.forEach(doc => {
     const data = doc.data() || {};
 
-    const createdAt = data.createdAt?.toDate
-      ? data.createdAt.toDate().toISOString()
-      : String(data.createdAt || "");
-
-    const entryFee = Number(data.entryFee ?? data.entry ?? 0);
-
-    if (entryFee > 0) {
-      recentTransactions.push({
-        type: "tournament_entry",
-        tournament: String(
-          data.tournamentTitle ||
-          data.title ||
-          data.name ||
-          ""
-        ),
-        amount: entryFee,
-        status: String(data.status || ""),
-        date: createdAt
-      });
-    }
-
-    // EARNING ONLY
-    
-    const earning = Number(
-      data.winningsAmount ??
-      data.prizeWon ??
-      data.winningAmount ??
-      data.winnings ??
-      0
-    );
-
-    if (earning > 0) {
-      recentTransactions.push({
-        type: "earning",
-        tournament: String(
-          data.tournamentTitle ||
-          data.title ||
-          data.name ||
-          ""
-        ),
-        amount: earning,
-        status: "earned",
-        date: createdAt
-      });
-    }
+    recentTransactions.push({
+      type: "match",
+      amount: Number(
+        data.amount ||
+        data.entryFee ||
+        data.winnings ||
+        0
+      ),
+      status: String(data.status || ""),
+      createdAt: data.createdAt || null,
+      ...data
+    });
   });
 
-  // LATEST FIRST
-  
   recentTransactions.sort((a, b) => {
-    return new Date(b.date).getTime() - new Date(a.date).getTime();
+    const aTime =
+      a.createdAt?.toMillis?.() ||
+      new Date(a.createdAt || 0).getTime() ||
+      0;
+
+    const bTime =
+      b.createdAt?.toMillis?.() ||
+      new Date(b.createdAt || 0).getTime() ||
+      0;
+
+    return bTime - aTime;
   });
 
-  // ONLY LATEST 20
-  
   recentTransactions = recentTransactions.slice(0, 20);
 
   console.log(
-    "AI ARENA RECENT TRANSACTIONS:",
-    recentTransactions
+    "AI Arena recent transactions loaded:",
+    recentTransactions.length
   );
 
-} catch (recentTransactionsError) {
-  console.warn(
-    "AI Arena recent transactions lookup failed:",
-    recentTransactionsError
+} catch (error) {
+  console.error(
+    "AI Arena recent transactions error:",
+    error
   );
+
+  recentTransactions = [];
 }
     
 // ----------------------------------------------------------
@@ -7171,7 +7138,6 @@ try {
       });
     }
 
-
     // -----------------------------------------------
     // Refresh latest profile
     // -----------------------------------------------
@@ -7326,7 +7292,6 @@ try {
         `⚠️ Proof milne ke baad main aapse final confirmation loonga.`
     });
   }
-
 
   // ========================================================
   // CASE 2 — USER SENDS SCREENSHOT / VIDEO
@@ -7509,7 +7474,7 @@ or
   }
 }
 
-    // -----------------------------------------------
+// -----------------------------------------------
 // AI VIDEO PROOF VERIFICATION
 // -----------------------------------------------
 // Video proof ko AI se verify karta hai.
@@ -7868,7 +7833,6 @@ OR
 
     let telegramResult;
 
-
     // -----------------------------------------------
     // Send proof + ticket details to Telegram
     // -----------------------------------------------
@@ -7932,7 +7896,6 @@ OR
         "Telegram ticket send failed"
       );
     }
-
 
     // -----------------------------------------------
     // Telegram deep link
@@ -8369,14 +8332,11 @@ const input = [
 
     console.error("AI Arena error:", error);
 
-    res.status(500).json({
-      ok: false,
-      error: "AI Arena request failed"
-    });
-  }
+    res.status(503).json({
+  ok: false,
+  error: "AI Arena request failed"
 });
-
-
+    
 // ============================================================
 // START SERVER
 // ============================================================
@@ -8419,14 +8379,14 @@ console.log(
 
   });
 
-
-app.listen(
+const server = app.listen(
   PORT,
   () => {
-
     console.log(
       `BATTLE X7 ARENA backend running on port ${PORT}`
     );
-
   }
 );
+
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 120000;
