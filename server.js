@@ -6288,6 +6288,42 @@ app.post("/auth/password/reset", async (req, res) => {
 });
 
 // ============================================================
+// GEMINI RAW PCM -> WAV BASE64
+// Gemini TTS returns 24kHz, mono, 16-bit PCM
+// ============================================================
+function x7PcmBase64ToWavBase64(
+  base64Pcm,
+  sampleRate = 24000,
+  channels = 1,
+  bitsPerSample = 16
+) {
+  const pcm = Buffer.from(base64Pcm, "base64");
+
+  const blockAlign = channels * bitsPerSample / 8;
+  const byteRate = sampleRate * blockAlign;
+
+  const header = Buffer.alloc(44);
+
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8, "ascii");
+
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16); // PCM header size
+  header.writeUInt16LE(1, 20);  // PCM format
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(pcm.length, 40);
+
+  return Buffer.concat([header, pcm]).toString("base64");
+}
+
+// ============================================================
 // AI ARENA TEXT-TO-SPEECH API
 // Server-side Gemini TTS - Kore Voice
 // ============================================================
@@ -6361,36 +6397,45 @@ app.post("/api/ai/tts", async (req, res) => {
       });
 
     const audioData =
-      response
-        .candidates?.[0]
-        ?.content?.parts?.[0]
-        ?.inlineData?.data;
+  response
+    .candidates?.[0]
+    ?.content?.parts?.[0]
+    ?.inlineData?.data;
 
-    if (!audioData) {
-      return res.status(500).json({
-        ok: false,
-        error: "Gemini did not return audio"
-      });
-    }
+if (!audioData) {
+  return res.status(500).json({
+    ok: false,
+    error: "Gemini did not return audio"
+  });
+}
 
-    return res.json({
-      ok: true,
-      mimeType: "audio/pcm",
-      audioBase64: audioData
-    });
+// Convert Gemini raw PCM audio to WAV
+    
+const wavBase64 = x7PcmBase64ToWavBase64(
+  audioData,
+  24000,
+  1,
+  16
+);
 
-  } catch (error) {
+return res.json({
+  ok: true,
+  mimeType: "audio/wav",
+  audioBase64: wavBase64
+});
 
-    console.error(
-      "AI Arena Gemini TTS error:",
-      error
-    );
+} catch (error) {
 
-    return res.status(500).json({
-      ok: false,
-      error: "Voice generation failed"
-    });
-  }
+  console.error(
+    "AI Arena Gemini TTS error:",
+    error
+  );
+
+  return res.status(500).json({
+    ok: false,
+    error: "Voice generation failed"
+  });
+}
 });
 
 // ============================================================
