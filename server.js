@@ -8434,6 +8434,71 @@ app.get("/api/test-elevenlabs", async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// TEMPORARY GEMINI CHAT API TEST
+// ============================================================
+app.get("/api/test-gemini", async (req, res) => {
+  try {
+    if (!gemini) {
+      return res.status(503).json({
+        ok: false,
+        error: "Gemini client not initialized"
+      });
+    }
+
+    const response = await gemini.models.generateContent({
+      model: "gemini-3.1-flash",
+      contents:
+        "Namaste, sirf ek line mein reply karo: Gemini API working hai."
+    });
+
+    const reply = String(response.text || "").trim();
+
+    return res.json({
+      ok: true,
+      provider: "Gemini",
+      model: "gemini-3.1-flash",
+      reply
+    });
+
+  } catch (error) {
+    console.error("Gemini API test error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// ============================================================
+// TEMPORARY OPENAI CHAT API TEST
+// ============================================================
+app.get("/api/test-openai", async (req, res) => {
+  try {
+    const response = await openai.responses.create({
+      model: process.env.AI_ARENA_MODEL || "gpt-5.6-mini",
+      input: "Namaste, sirf ek line mein reply karo: OpenAI API working hai."
+    });
+
+    return res.json({
+      ok: true,
+      provider: "OpenAI",
+      model: process.env.AI_ARENA_MODEL || "gpt-5.6-mini",
+      reply: String(response.output_text || "").trim()
+    });
+
+  } catch (error) {
+    console.error("OpenAI API test error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      provider: "OpenAI",
+      error: error.message
+    });
+  }
+});
     
 // ============================================================
 // START SERVER
