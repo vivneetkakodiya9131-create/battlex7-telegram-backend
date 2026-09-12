@@ -8384,6 +8384,56 @@ app.get("/api/test-sarvam", async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// TEMPORARY ELEVENLABS API TEST
+// ============================================================
+app.get("/api/test-elevenlabs", async (req, res) => {
+  try {
+    const response = await fetch(
+      "https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": process.env.ELEVENLABS_API_KEY
+        },
+        body: JSON.stringify({
+          text: "Namaste, ElevenLabs API working hai.",
+          model_id: "eleven_multilingual_v2"
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      return res.status(response.status).json({
+        ok: false,
+        elevenlabs: errorText
+      });
+    }
+
+    const audioBuffer = Buffer.from(
+      await response.arrayBuffer()
+    );
+
+    return res.json({
+      ok: true,
+      provider: "ElevenLabs",
+      audioBytes: audioBuffer.length,
+      message: "ElevenLabs API working hai."
+    });
+
+  } catch (error) {
+    console.error("ElevenLabs API test error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
     
 // ============================================================
 // START SERVER
