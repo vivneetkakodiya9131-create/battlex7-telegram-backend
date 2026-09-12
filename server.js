@@ -8501,88 +8501,61 @@ app.get("/api/test-openai", async (req, res) => {
 });
 
 // ============================================================
-// TEMPORARY GEMINI + OPENAI AVAILABLE MODELS TEST
+// TEMPORARY GEMINI AVAILABLE MODELS TEST
 // ============================================================
-app.get("/api/test-ai-models", async (req, res) => {
-  const result = {
-    gemini: null,
-    openai: null
-  };
-
-  // ==========================================================
-  // GEMINI AVAILABLE MODELS
-  // ==========================================================
+app.get("/api/test-gemini-models", async (req, res) => {
   try {
-    if (!gemini) {
-      result.gemini = {
-        ok: false,
-        error: "Gemini client not initialized"
-      };
-    } else {
-      const geminiModels = [];
-
-      for await (const model of gemini.models.list()) {
-        const actions = Array.isArray(model.supportedActions)
-          ? model.supportedActions
-          : [];
-
-        if (actions.includes("generateContent")) {
-          geminiModels.push({
-            name: model.name,
-            displayName: model.displayName || null,
-            supportedActions: actions
-          });
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models",
+      {
+        method: "GET",
+        headers: {
+          "x-goog-api-key": process.env.GEMINI_API_KEY
         }
       }
+    );
 
-      result.gemini = {
-        ok: true,
-        count: geminiModels.length,
-        models: geminiModels
-      };
-    }
-  } catch (error) {
-    console.error("Gemini model list error:", error);
+    const data = await response.json();
 
-    result.gemini = {
-      ok: false,
-      error: error.message
-    };
-  }
-
-  // ==========================================================
-  // OPENAI AVAILABLE MODELS
-  // ==========================================================
-  try {
-    const openaiModels = await openai.models.list();
-
-    const models = [];
-
-    for await (const model of openaiModels) {
-      models.push({
-        id: model.id,
-        owned_by: model.owned_by || null
+    if (!response.ok) {
+      return res.status(response.status).json({
+        ok: false,
+        provider: "Gemini",
+        error: data
       });
     }
 
-    result.openai = {
+    const models = Array.isArray(data.models)
+      ? data.models
+          .filter(model =>
+            Array.isArray(model.supportedGenerationMethods) &&
+            model.supportedGenerationMethods.includes("generateContent")
+          )
+          .map(model => ({
+            name: model.name,
+            baseModelId: model.baseModelId || null,
+            displayName: model.displayName || null,
+            supportedGenerationMethods:
+              model.supportedGenerationMethods
+          }))
+      : [];
+
+    return res.json({
       ok: true,
+      provider: "Gemini",
       count: models.length,
       models
-    };
+    });
+
   } catch (error) {
-    console.error("OpenAI model list error:", error);
+    console.error("Gemini models test error:", error);
 
-    result.openai = {
+    return res.status(500).json({
       ok: false,
+      provider: "Gemini",
       error: error.message
-    };
+    });
   }
-
-  return res.json({
-    ok: Boolean(result.gemini?.ok && result.openai?.ok),
-    ...result
-  });
 });
     
 // ============================================================
