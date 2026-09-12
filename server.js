@@ -26,7 +26,6 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID || "-1004479342350";
 const BOT_USERNAME = "BettelX7ArenaSupportBot";
 
-
 // ============================================================
 // NEON POSTGRESQL
 // ============================================================
@@ -37,7 +36,6 @@ const pool = process.env.DATABASE_URL
       ssl: { rejectUnauthorized: false }
     })
   : null;
-
 
 // ============================================================
 // FIREBASE ADMIN
@@ -263,6 +261,472 @@ async function requireFirebaseUser(req, res) {
     return null;
   }
 }
+
+// ============================================================
+// BATTLE X7 ARENA — SECURE TOURNAMENT JOIN
+// STEP 1F
+// ============================================================
+
+app.post(
+  "/tournament/join",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase is not configured"
+      });
+    }
+
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!decoded) return;
+
+    const tournamentId =
+      String(
+        req.body?.tournamentId || ""
+      ).trim();
+
+    if (!tournamentId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Tournament ID is required"
+      });
+    }
+
+    try {
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(decoded.uid);
+
+      const tournamentRef =
+        firestore
+          .collection("tournaments")
+          .doc(tournamentId);
+
+      const joinLockRef =
+  firestore
+    .collection("users")
+    .doc(decoded.uid)
+    .collection("tournamentJoins")
+    .doc(tournamentId);
+
+      const result =
+        await firestore.runTransaction(
+          async (tx) => {
+
+            // --------------------------------------------------
+            // LOAD USER
+            // --------------------------------------------------
+
+            const userSnap =
+              await tx.get(userRef);
+
+            if (!userSnap.exists) {
+              throw new Error(
+                "USER_NOT_FOUND"
+              );
+            }
+
+            const user =
+              userSnap.data() || {};
+
+            const balance =
+              Number(
+                user.walletBalance || 0
+              );
+
+            // --------------------------------------------------
+            // LOAD TOURNAMENT
+            // --------------------------------------------------
+
+            const tournamentSnap =
+              await tx.get(
+                tournamentRef
+              );
+
+            if (!tournamentSnap.exists) {
+              throw new Error(
+                "TOURNAMENT_NOT_FOUND"
+              );
+            }
+
+            const tournament =
+              tournamentSnap.data() || {};
+
+            const entryFee =
+              Number(
+                tournament.entryFee ??
+                tournament.entry ??
+                0
+              );
+
+            if (
+              !Number.isFinite(entryFee) ||
+              entryFee < 0
+            ) {
+              throw new Error(
+                "INVALID_ENTRY_FEE"
+              );
+            }
+
+            // --------------------------------------------------
+            // CHECK DUPLICATE JOIN
+            // --------------------------------------------------
+
+             const joinLockRef =
+  firestore
+    .collection("users")
+    .doc(decoded.uid)
+    .collection("tournamentJoins")
+    .doc(tournamentId);
+
+const joinLockSnap =
+  await tx.get(joinLockRef);
+
+if (joinLockSnap.exists) {
+
+  const lockData =
+    joinLockSnap.data() || {};
+
+  const lockStatus =
+    String(
+      lockData.status || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  if (
+    lockStatus !== "rejected" &&
+    lockStatus !== "cancelled" &&
+    lockStatus !== "canceled"
+  ) {
+    throw new Error(
+      "ALREADY_JOINED"
+    );
+  }
+}
+            
+            // --------------------------------------------------
+            // CHECK BALANCE — PAID TOURNAMENT ONLY
+            // --------------------------------------------------
+
+            if (
+              entryFee > 0 &&
+              balance < entryFee
+            ) {
+              throw new Error(
+                "INSUFFICIENT_BALANCE"
+              );
+            }
+
+            // --------------------------------------------------
+            // CREATE JOIN REQUEST
+            // --------------------------------------------------
+
+            const joinRequestRef =
+              firestore
+                .collection(
+                  "joinRequests"
+                )
+                .doc();
+
+            // --------------------------------------------------
+            // SAVE ATOMIC TOURNAMENT JOIN LOCK
+            // --------------------------------------------------
+
+            tx.set(
+              joinLockRef,
+              {
+                userId:
+                  decoded.uid,
+
+                tournamentId,
+
+                joinRequestId:
+                  joinRequestRef.id,
+
+                status:
+                  entryFee > 0
+                    ? "paid"
+                    : "joined",
+
+                entryFee,
+
+                createdAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp(),
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+            
+            const newBalance =
+              balance - entryFee;
+
+            // --------------------------------------------------
+            // UPDATE WALLET
+            // FREE TOURNAMENT = NO DEDUCTION
+            // --------------------------------------------------
+
+            if (entryFee > 0) {
+
+              tx.update(
+                userRef,
+                {
+                  walletBalance:
+                    newBalance,
+
+                  updatedAt:
+                    admin.firestore
+                      .FieldValue
+                      .serverTimestamp()
+                }
+              );
+
+            }
+
+            // --------------------------------------------------
+            // JOIN REQUEST DATA
+            // --------------------------------------------------
+
+            tx.set(
+              joinRequestRef,
+              {
+                userId:
+                  decoded.uid,
+
+                userEmail:
+                  decoded.email || "",
+
+                username:
+                  user.username ||
+                  decoded.name ||
+                  "Player",
+
+                freeFireName:
+                  user.freeFireName ||
+                  "",
+
+                freeFireUid:
+                  user.freeFireUid ||
+                  "",
+
+                photoUrl:
+                  user.photoUrl ||
+                  decoded.picture ||
+                  "",
+
+                tournamentId,
+
+                tournamentTitle:
+                  tournament.title ||
+                  tournament.name ||
+                  "SOLO",
+
+                entryFee,
+
+                status:
+                  entryFee > 0
+                    ? "paid"
+                    : "joined",
+
+                paymentVerified:
+                  entryFee === 0,
+
+                paymentConfirmed:
+                  entryFee === 0,
+
+                paid:
+                  entryFee === 0,
+
+                createdAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+
+            // --------------------------------------------------
+            // UNIVERSAL WALLET LEDGER
+            // PAID TOURNAMENT ONLY
+            // --------------------------------------------------
+
+            if (entryFee > 0) {
+
+              const ledgerRef =
+                firestore
+                  .collection("users")
+                  .doc(decoded.uid)
+                  .collection("walletLedger")
+                  .doc(
+                    `tournament_${joinRequestRef.id}`
+                  );
+
+              tx.create(
+                ledgerRef,
+                {
+                  transactionId:
+                    `tournament_${joinRequestRef.id}`,
+
+                  userId:
+                    decoded.uid,
+
+                  type:
+                    "tournament_entry",
+
+                  direction:
+                    "debit",
+
+                  amount:
+                    entryFee,
+
+                  previousBalance:
+                    balance,
+
+                  newBalance,
+
+                  status:
+                    "completed",
+
+                  referenceId:
+                    joinRequestRef.id,
+
+                  description:
+                    `Tournament Entry - ${
+                      tournament.title ||
+                      tournament.name ||
+                      tournamentId
+                    }`,
+
+                  metadata: {
+                    tournamentId,
+                    tournamentTitle:
+                      tournament.title ||
+                      tournament.name ||
+                      ""
+                  },
+
+                  createdAt:
+                    admin.firestore
+                      .FieldValue
+                      .serverTimestamp()
+                }
+              );
+
+            }
+
+            return {
+              joinRequestId:
+                joinRequestRef.id,
+
+              newBalance
+            };
+
+          }
+        );
+
+      return res.json({
+  ok: true,
+  success: true,
+
+  joinRequestId:
+    result.joinRequestId,
+
+  newBalance:
+    result.newBalance
+});
+
+    } catch (error) {
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+  ok: false,
+  success: false,
+  error: "User not found",
+  message: "User not found"
+});
+      }
+
+      if (
+        error.message ===
+        "TOURNAMENT_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+  ok: false,
+  success: false,
+  error: "Tournament not found",
+  message: "Tournament not found"
+});
+      }
+
+      if (
+        error.message ===
+        "ALREADY_JOINED"
+      ) {
+        return res.status(409).json({
+  ok: false,
+  success: false,
+  error:
+    "You already joined this tournament",
+  message:
+    "You already joined this tournament"
+});
+      }
+
+      if (
+        error.message ===
+        "INSUFFICIENT_BALANCE"
+      ) {
+        return res.status(400).json({
+  ok: false,
+  success: false,
+  error:
+    "Insufficient wallet balance",
+  message:
+    "Insufficient wallet balance"
+});
+      }
+
+      if (
+        error.message ===
+        "INVALID_ENTRY_FEE"
+      ) {
+        return res.status(400).json({
+  ok: false,
+  success: false,
+  error: "Invalid tournament entry fee",
+  message: "Invalid tournament entry fee"
+});
+      }
+
+      console.error(
+        "TOURNAMENT JOIN ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+  ok: false,
+  success: false,
+  error: "Failed to join tournament",
+  message: "Failed to join tournament"
+});
+    }
+  }
+);
 
 // ============================================================
 // UNIVERSAL WALLET LEDGER
