@@ -8804,7 +8804,7 @@ app.get("/api/test-all-ai", async (req, res) => {
         body: JSON.stringify({
           text: "Namaste, Sarvam TTS working hai.",
           target_language_code: "hi-IN",
-          speaker: "anushka",
+          speaker: "priya",
           model: "bulbul:v3",
           speech_sample_rate: 24000,
           output_audio_codec: "linear16"
