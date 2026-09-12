@@ -8314,11 +8314,11 @@ const input = [
   }
 ];
 
-    const response = await openai.responses.create({
-      model: process.env.AI_ARENA_MODEL || "gpt-5.6-luna",
+    
+const response = await openai.responses.create({
+      model: process.env.AI_ARENA_MODEL || "gpt-5.6-mini",
       input
     });
-
     const reply =
       String(response.output_text || "").trim();
 
