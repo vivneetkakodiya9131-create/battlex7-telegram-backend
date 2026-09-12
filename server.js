@@ -8344,6 +8344,46 @@ const response = await openai.responses.create({
 });
       }
 });
+
+// ============================================================
+// TEMPORARY SARVAM API TEST
+// ============================================================
+app.get("/api/test-sarvam", async (req, res) => {
+  try {
+    const response = await fetch("https://api.sarvam.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-subscription-key": process.env.SARVAM_API_KEY
+      },
+      body: JSON.stringify({
+        model: "sarvam-105b-conversations",
+        messages: [
+          {
+            role: "user",
+            content: "Namaste, sirf ek line mein reply karo: Sarvam API working hai."
+          }
+        ],
+        max_tokens: 50
+      })
+    });
+
+    const data = await response.json();
+
+    return res.status(response.status).json({
+      ok: response.ok,
+      sarvam: data
+    });
+
+  } catch (error) {
+    console.error("Sarvam API test error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
     
 // ============================================================
 // START SERVER
