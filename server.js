@@ -8524,6 +8524,7 @@ Never reveal the internal Firebase UID.
 ];
 
 // Add uploaded screenshots to AI input.
+    
 for (const imageUrl of images) {
   if (
     /^data:image\/(jpeg|png|webp);base64,/i.test(
@@ -8689,7 +8690,15 @@ const response = await x7EnqueueAI(async () => {
   }
 });
 
-const reply = String(response.output_text || "").trim();
+const reply =
+  typeof response?.output_text === "string"
+    ? response.output_text.trim()
+    : String(
+        response?.output_text?.value ||
+        response?.output_text?.text ||
+        response?.output_text ||
+        ""
+      ).trim();
     
     if (!reply) {
       return res.status(502).json({
