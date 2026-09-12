@@ -6325,11 +6325,13 @@ function x7PcmBase64ToWavBase64(
 
 // ============================================================
 // AI ARENA TEXT-TO-SPEECH API
-// Server-side Gemini TTS - Kore Voice
+// Multi-Provider Female Voice Fallback
+// Sarvam → ElevenLabs → Gemini
 // ============================================================
 
 app.post("/api/ai/tts", async (req, res) => {
   try {
+
     const decoded = await requireFirebaseUser(req, res);
     if (!decoded) return;
 
@@ -6354,89 +6356,322 @@ app.post("/api/ai/tts", async (req, res) => {
       });
     }
 
-    if (!gemini) {
-      return res.status(503).json({
-        ok: false,
-        error: "Gemini is not configured"
+    // ============================================================
+    // 1️⃣ PRIMARY — SARVAM BULBUL TTS
+    // ============================================================
+
+    try {
+
+      if (!process.env.SARVAM_API_KEY) {
+        throw new Error("Sarvam API key not configured");
+      }
+
+      const sarvamResponse = await fetch(
+        "https://api.sarvam.ai/text-to-speech",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json",
+            "api-subscription-key":
+              process.env.SARVAM_API_KEY
+          },
+
+          body: JSON.stringify({
+            inputs: [text],
+
+            target_language_code:
+              language === "hi"
+                ? "hi-IN"
+                : "en-IN",
+
+            speaker: "priya",
+
+            model: "bulbul:v3",
+
+            pace: 1.0,
+
+            speech_sample_rate: 48000
+          })
+        }
+      );
+
+      const sarvamData =
+        await sarvamResponse.json();
+
+      if (!sarvamResponse.ok) {
+        throw new Error(
+          `Sarvam TTS failed: ${JSON.stringify(sarvamData)}`
+        );
+      }
+
+      const audioBase64 =
+        sarvamData?.audios?.[0];
+
+      if (!audioBase64) {
+        throw new Error(
+          "Sarvam returned empty audio"
+        );
+      }
+
+      return res.json({
+        ok: true,
+        provider: "sarvam",
+        mimeType: "audio/wav",
+        audioBase64
       });
+
+    } catch (sarvamError) {
+
+      console.error(
+        "Sarvam TTS failed. Switching to ElevenLabs:",
+        sarvamError?.message ||
+          sarvamError
+      );
+
     }
 
-    const instruction =
-      language === "hi"
-        ? "Warm, sweet and melodious Hindi female voice. Natural Indian Hindi pronunciation, calm but energetic gaming-announcer style, confident and friendly tone, clear speech, expressive emotions, smooth pacing, with slight excitement during important lines. Professional, cinematic and engaging. Speak naturally and conversationally. Do not sound robotic or mechanical. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud."
-        : "Warm, sweet and melodious Indian female voice. Natural Indian English pronunciation, calm but energetic gaming-announcer style, confident and friendly tone, clear speech, expressive emotions, smooth pacing, with slight excitement during important lines. Professional, cinematic and engaging. Speak naturally and conversationally. Do not sound robotic or mechanical. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud.";
+    // ============================================================
+    // 2️⃣ FALLBACK — ELEVENLABS
+    // ============================================================
 
-    const promptText =
-      `[${instruction}]:\n${text}`;
+    try {
 
-    const response =
-      await gemini.models.generateContent({
-        model: "gemini-3.1-flash-tts-preview",
+      if (!process.env.ELEVENLABS_API_KEY) {
+        throw new Error(
+          "ElevenLabs API key not configured"
+        );
+      }
 
-        contents: [
-          {
-            parts: [
-              {
-                text: promptText
-              }
-            ]
-          }
-        ],
+      const elevenResponse = await fetch(
+        "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB",
+        {
+          method: "POST",
 
-        config: {
-          responseModalities: ["AUDIO"],
+          headers: {
+            "Content-Type": "application/json",
+            "xi-api-key":
+              process.env.ELEVENLABS_API_KEY
+          },
 
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: "Kore"
+          body: JSON.stringify({
+            text,
+
+            model_id:
+              "eleven_multilingual_v2",
+
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75
+            }
+          })
+        }
+      );
+
+      if (!elevenResponse.ok) {
+
+        const errorText =
+          await elevenResponse.text();
+
+        throw new Error(
+          `ElevenLabs TTS failed: ${errorText}`
+        );
+      }
+
+      const elevenBuffer =
+        Buffer.from(
+          await elevenResponse.arrayBuffer()
+        );
+
+      return res.json({
+        ok: true,
+        provider: "elevenlabs",
+        mimeType: "audio/mpeg",
+        audioBase64:
+          elevenBuffer.toString("base64")
+      });
+
+    } catch (elevenError) {
+
+      console.error(
+        "ElevenLabs TTS failed. Switching to Gemini:",
+        elevenError?.message ||
+          elevenError
+      );
+
+    }
+
+    // ============================================================
+    // 3️⃣ FINAL FALLBACK — GEMINI TTS
+    // ============================================================
+
+    try {
+
+      if (!gemini) {
+        throw new Error(
+          "Gemini client not initialized"
+        );
+      }
+
+      const instruction =
+        language === "hi"
+          ? "Warm, sweet and melodious Hindi female voice. Natural Indian Hindi pronunciation, calm but energetic gaming-announcer style, confident and friendly tone, clear speech, expressive emotions, smooth pacing, with slight excitement during important lines. Professional, cinematic and engaging. Speak naturally and conversationally. Do not sound robotic or mechanical. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud."
+          : "Warm, sweet and melodious Indian English female voice. Natural Indian English pronunciation, calm but energetic gaming-announcer style, confident and friendly tone, clear speech, expressive emotions, smooth pacing, with slight excitement during important lines. Professional, cinematic and engaging. Speak naturally and conversationally. Do not sound robotic or mechanical. Pronounce English words, numbers, Free Fire names and tournament terms naturally and clearly. Never read emoji names, icon names, markdown symbols, URLs or formatting symbols aloud.";
+
+      const promptText =
+        `[${instruction}]:\n${text}`;
+
+      const geminiResponse =
+        await gemini.models.generateContent({
+
+          model:
+            "gemini-3.1-flash-tts-preview",
+
+          contents: [
+            {
+              parts: [
+                {
+                  text: promptText
+                }
+              ]
+            }
+          ],
+
+          config: {
+            responseModalities: ["AUDIO"],
+
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: "Kore"
+                }
               }
             }
           }
-        }
+        });
+
+      const audioData =
+        geminiResponse
+          ?.candidates?.[0]
+          ?.content?.parts?.[0]
+          ?.inlineData?.data;
+
+      if (!audioData) {
+        throw new Error(
+          "Gemini returned empty audio"
+        );
+      }
+
+      const wavBase64 =
+        x7PcmBase64ToWavBase64(
+          audioData,
+          24000,
+          1,
+          16
+        );
+
+      return res.json({
+        ok: true,
+        provider: "gemini",
+        mimeType: "audio/wav",
+        audioBase64: wavBase64
       });
 
-    const audioData =
-  response
-    .candidates?.[0]
-    ?.content?.parts?.[0]
-    ?.inlineData?.data;
+    } catch (geminiError) {
 
-if (!audioData) {
-  return res.status(500).json({
-    ok: false,
-    error: "Gemini did not return audio"
+      console.error(
+        "Gemini TTS failed:",
+        geminiError?.message ||
+          geminiError
+      );
+
+      return res.status(503).json({
+        ok: false,
+        error:
+          "All AI voice providers failed"
+      });
+    }
+
+  } catch (error) {
+
+    console.error(
+      "AI Arena TTS error:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Voice generation failed"
+    });
+  }
+});
+
+// ============================================================
+// BATTLE X7 ARENA — AI REQUEST QUEUE ENGINE
+// Step 1: Queue foundation
+// ============================================================
+
+const x7AIQueue = {
+  active: 0,
+  pending: [],
+  maxConcurrent: 12,
+  maxPending: 5000
+};
+
+function x7RunNextAIQueueItem() {
+  while (
+    x7AIQueue.active < x7AIQueue.maxConcurrent &&
+    x7AIQueue.pending.length > 0
+  ) {
+    const job = x7AIQueue.pending.shift();
+
+    x7AIQueue.active++;
+
+    Promise.resolve()
+      .then(() => job.task())
+      .then(result => {
+        job.resolve(result);
+      })
+      .catch(error => {
+        job.reject(error);
+      })
+      .finally(() => {
+        x7AIQueue.active--;
+        x7RunNextAIQueueItem();
+      });
+  }
+}
+
+function x7EnqueueAI(task) {
+  return new Promise((resolve, reject) => {
+    if (x7AIQueue.pending.length >= x7AIQueue.maxPending) {
+      return reject(
+        new Error("AI Arena queue is temporarily full")
+      );
+    }
+
+    x7AIQueue.pending.push({
+      task,
+      resolve,
+      reject
+    });
+
+    x7RunNextAIQueueItem();
   });
 }
 
-// Convert Gemini raw PCM audio to WAV
-    
-const wavBase64 = x7PcmBase64ToWavBase64(
-  audioData,
-  24000,
-  1,
-  16
-);
-
-return res.json({
-  ok: true,
-  mimeType: "audio/wav",
-  audioBase64: wavBase64
-});
-
-} catch (error) {
-
-  console.error(
-    "AI Arena Gemini TTS error:",
-    error
-  );
-
-  return res.status(500).json({
-    ok: false,
-    error: "Voice generation failed"
-  });
+function x7GetAIQueueStats() {
+  return {
+    active: x7AIQueue.active,
+    pending: x7AIQueue.pending.length,
+    maxConcurrent: x7AIQueue.maxConcurrent,
+    maxPending: x7AIQueue.maxPending
+  };
 }
-});
+
+// ============================================================
+// END AI REQUEST QUEUE ENGINE
+// ============================================================
 
 // ============================================================
 // AI ARENA CHAT API
@@ -8314,14 +8549,148 @@ const input = [
   }
 ];
 
-    
-const response = await openai.responses.create({
-      model: process.env.AI_ARENA_MODEL || "gpt-5.6-mini",
+const response = await x7EnqueueAI(async () => {
+
+  // ============================================================
+  // 1️⃣ PRIMARY — OPENAI
+  // ============================================================
+
+  try {
+
+    return await openai.responses.create({
+      model: "gpt-5.6-luna",
       input
     });
-    const reply =
-      String(response.output_text || "").trim();
 
+  } catch (openaiError) {
+
+    console.error(
+      "OpenAI failed. Switching to Sarvam:",
+      openaiError?.message || openaiError
+    );
+
+  }
+
+  // ============================================================
+  // 2️⃣ FALLBACK — SARVAM
+  // ============================================================
+
+  try {
+
+    const sarvamResponse = await fetch(
+      "https://api.sarvam.ai/v1/chat/completions",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json",
+          "api-subscription-key": process.env.SARVAM_API_KEY
+        },
+
+        body: JSON.stringify({
+          model: "sarvam-105b-conversations",
+
+          messages: input
+            .filter(item => item.role !== "developer")
+            .map(item => ({
+              role:
+                item.role === "assistant"
+                  ? "assistant"
+                  : "user",
+
+              content: String(item.content || "")
+            })),
+
+          max_tokens: 500
+        })
+      }
+    );
+
+    const sarvamData = await sarvamResponse.json();
+
+    if (!sarvamResponse.ok) {
+      throw new Error(
+        `Sarvam failed: ${JSON.stringify(sarvamData)}`
+      );
+    }
+
+    const sarvamReply =
+      sarvamData?.choices?.[0]?.message?.content || "";
+
+    if (!sarvamReply.trim()) {
+      throw new Error("Sarvam returned empty reply");
+    }
+
+    return {
+      output_text: sarvamReply
+    };
+
+  } catch (sarvamError) {
+
+    console.error(
+      "Sarvam failed. Switching to Gemini:",
+      sarvamError?.message || sarvamError
+    );
+
+  }
+
+  // ============================================================
+  // 3️⃣ FINAL FALLBACK — GEMINI
+  // ============================================================
+
+  try {
+
+    if (!gemini) {
+      throw new Error("Gemini client not initialized");
+    }
+
+    const geminiResponse =
+      await gemini.models.generateContent({
+
+        model: "gemini-3.8-flash",
+
+        contents: input
+          .filter(item => item.role !== "developer")
+          .map(item => ({
+            role:
+              item.role === "assistant"
+                ? "model"
+                : "user",
+
+            parts: [
+              {
+                text: String(item.content || "")
+              }
+            ]
+          }))
+      });
+
+    const geminiReply =
+      String(geminiResponse.text || "").trim();
+
+    if (!geminiReply) {
+      throw new Error("Gemini returned empty reply");
+    }
+
+    return {
+      output_text: geminiReply
+    };
+
+  } catch (geminiError) {
+
+    console.error(
+      "Gemini final fallback failed:",
+      geminiError?.message || geminiError
+    );
+
+    throw new Error(
+      "All AI providers failed"
+    );
+  }
+});
+
+const reply = String(response.output_text || "").trim();
+    
     if (!reply) {
       return res.status(502).json({
         ok: false,
