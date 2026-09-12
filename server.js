@@ -8557,6 +8557,343 @@ app.get("/api/test-gemini-models", async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// TEMPORARY ALL AI PROVIDERS + TTS COMBINED TEST
+// ============================================================
+app.get("/api/test-all-ai", async (req, res) => {
+
+  const result = {
+    sarvam_chat: null,
+    elevenlabs_tts: null,
+    gemini_chat: null,
+    openai_chat: null,
+    gemini_tts: null,
+    openai_tts: null,
+    sarvam_tts: null,
+    elevenlabs_tts_final: null
+  };
+
+  // ==========================================================
+  // 1. SARVAM CHAT
+  // ==========================================================
+  try {
+    const response = await fetch(
+      "https://api.sarvam.ai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-subscription-key": process.env.SARVAM_API_KEY
+        },
+        body: JSON.stringify({
+          model: "sarvam-105b-conversations",
+          messages: [
+            {
+              role: "user",
+              content: "Sirf ek line mein bolo: Sarvam Chat working hai."
+            }
+          ],
+          max_tokens: 100,
+          reasoning_effort: null
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(JSON.stringify(data));
+    }
+
+    result.sarvam_chat = {
+      ok: true,
+      model: data.model || "sarvam-105b-conversations",
+      reply: String(
+        data.choices?.[0]?.message?.content || ""
+      ).trim()
+    };
+
+  } catch (error) {
+    result.sarvam_chat = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 2. ELEVENLABS TTS
+  // ==========================================================
+  try {
+    const response = await fetch(
+      "https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": process.env.ELEVENLABS_API_KEY
+        },
+        body: JSON.stringify({
+          text: "Namaste, ElevenLabs TTS working hai.",
+          model_id: "eleven_multilingual_v2"
+        })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const audioBuffer = Buffer.from(
+      await response.arrayBuffer()
+    );
+
+    result.elevenlabs_tts = {
+      ok: true,
+      audioBytes: audioBuffer.length
+    };
+
+  } catch (error) {
+    result.elevenlabs_tts = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 3. GEMINI CHAT
+  // ==========================================================
+  try {
+    if (!gemini) {
+      throw new Error("Gemini client not initialized");
+    }
+
+    const response = await gemini.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents:
+        "Sirf ek line mein bolo: Gemini Chat working hai."
+    });
+
+    result.gemini_chat = {
+      ok: true,
+      model: "gemini-3.8-flash",
+      reply: String(response.text || "").trim()
+    };
+
+  } catch (error) {
+    result.gemini_chat = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 4. OPENAI CHAT
+  // ==========================================================
+  try {
+    const response = await openai.responses.create({
+      model: "gpt-5.6-luna",
+      input:
+        "Sirf ek line mein bolo: OpenAI Chat working hai."
+    });
+
+    result.openai_chat = {
+      ok: true,
+      model: "gpt-5.6-luna",
+      reply: String(response.output_text || "").trim()
+    };
+
+  } catch (error) {
+    result.openai_chat = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 5. GEMINI TTS
+  // ==========================================================
+  try {
+    if (!gemini) {
+      throw new Error("Gemini client not initialized");
+    }
+
+    const response = await gemini.models.generateContent({
+      model: "gemini-3.1-flash-tts-preview",
+      contents:
+        "Namaste, Gemini TTS working hai.",
+      config: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: "Kore"
+            }
+          }
+        }
+      }
+    });
+
+    const audioData =
+      response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+    if (!audioData) {
+      throw new Error("Gemini TTS returned no audio");
+    }
+
+    result.gemini_tts = {
+      ok: true,
+      model: "gemini-3.1-flash-tts-preview",
+      audioBytes: Buffer.from(audioData, "base64").length
+    };
+
+  } catch (error) {
+    result.gemini_tts = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 6. OPENAI TTS
+  // ==========================================================
+  try {
+    const response = await openai.audio.speech.create({
+      model: "gpt-4o-mini-tts",
+      voice: "coral",
+      input: "Namaste, OpenAI TTS working hai.",
+      response_format: "mp3"
+    });
+
+    const audioBuffer = Buffer.from(
+      await response.arrayBuffer()
+    );
+
+    result.openai_tts = {
+      ok: true,
+      model: "gpt-4o-mini-tts",
+      voice: "coral",
+      audioBytes: audioBuffer.length
+    };
+
+  } catch (error) {
+    result.openai_tts = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 7. SARVAM TTS
+  // ==========================================================
+  try {
+    const response = await fetch(
+      "https://api.sarvam.ai/text-to-speech",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-subscription-key": process.env.SARVAM_API_KEY
+        },
+        body: JSON.stringify({
+          text: "Namaste, Sarvam TTS working hai.",
+          target_language_code: "hi-IN",
+          speaker: "anushka",
+          model: "bulbul:v3",
+          speech_sample_rate: 24000,
+          output_audio_codec: "linear16"
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(JSON.stringify(data));
+    }
+
+    const audioBase64 = (data.audios || []).join("");
+
+    if (!audioBase64) {
+      throw new Error("Sarvam TTS returned no audio");
+    }
+
+    result.sarvam_tts = {
+      ok: true,
+      model: "bulbul:v3",
+      audioBytes: Buffer.from(audioBase64, "base64").length
+    };
+
+  } catch (error) {
+    result.sarvam_tts = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // 8. ELEVENLABS FINAL TTS
+  // ==========================================================
+  try {
+    const response = await fetch(
+      "https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": process.env.ELEVENLABS_API_KEY
+        },
+        body: JSON.stringify({
+          text: "Namaste, ElevenLabs final TTS working hai.",
+          model_id: "eleven_multilingual_v2"
+        })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const audioBuffer = Buffer.from(
+      await response.arrayBuffer()
+    );
+
+    result.elevenlabs_tts_final = {
+      ok: true,
+      model: "eleven_multilingual_v2",
+      audioBytes: audioBuffer.length
+    };
+
+  } catch (error) {
+    result.elevenlabs_tts_final = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+
+  // ==========================================================
+  // FINAL RESULT
+  // ==========================================================
+  const tests = Object.values(result);
+  const passed = tests.filter(item => item?.ok === true).length;
+  const failed = tests.filter(item => item?.ok !== true).length;
+
+  return res.json({
+    ok: failed === 0,
+    totalTests: tests.length,
+    passed,
+    failed,
+    result
+  });
+});
     
 // ============================================================
 // START SERVER
