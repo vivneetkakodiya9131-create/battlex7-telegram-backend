@@ -264,6 +264,187 @@ async function requireFirebaseUser(req, res) {
   }
 }
 
+// ============================================================
+// UNIVERSAL WALLET LEDGER
+// STEP 1A
+// ============================================================
+
+function createWalletLedgerRef(
+  userId,
+  transactionId
+) {
+  return firestore
+    .collection("users")
+    .doc(userId)
+    .collection("walletLedger")
+    .doc(transactionId);
+}
+
+
+/**
+ * Record one wallet movement inside an existing
+ * Firestore transaction.
+ *
+ * IMPORTANT:
+ * This function does NOT change walletBalance.
+ * The caller must update walletBalance in
+ * the SAME Firestore transaction.
+ */
+function addWalletLedgerEntry(
+  tx,
+  {
+    userId,
+    transactionId,
+    type,
+    direction,
+    amount,
+    previousBalance,
+    newBalance,
+    status = "completed",
+    referenceId = "",
+    description = "",
+    metadata = {}
+  }
+) {
+
+  if (
+    !firebaseReady ||
+    !firestore
+  ) {
+    throw new Error(
+      "FIREBASE_NOT_READY"
+    );
+  }
+
+
+  const numericAmount =
+    Number(amount);
+
+  const oldBalance =
+    Number(previousBalance);
+
+  const updatedBalance =
+    Number(newBalance);
+
+
+  if (!userId) {
+    throw new Error(
+      "WALLET_LEDGER_USER_REQUIRED"
+    );
+  }
+
+
+  if (!transactionId) {
+    throw new Error(
+      "WALLET_LEDGER_TRANSACTION_ID_REQUIRED"
+    );
+  }
+
+
+  if (
+    !Number.isFinite(
+      numericAmount
+    ) ||
+    numericAmount <= 0
+  ) {
+    throw new Error(
+      "WALLET_LEDGER_INVALID_AMOUNT"
+    );
+  }
+
+
+  if (
+    !Number.isFinite(
+      oldBalance
+    ) ||
+    oldBalance < 0
+  ) {
+    throw new Error(
+      "WALLET_LEDGER_INVALID_PREVIOUS_BALANCE"
+    );
+  }
+
+
+  if (
+    !Number.isFinite(
+      updatedBalance
+    ) ||
+    updatedBalance < 0
+  ) {
+    throw new Error(
+      "WALLET_LEDGER_INVALID_NEW_BALANCE"
+    );
+  }
+
+
+  const ledgerRef =
+    createWalletLedgerRef(
+      userId,
+      transactionId
+    );
+
+
+  tx.create(
+    ledgerRef,
+    {
+      transactionId,
+
+      userId,
+
+      type:
+        String(
+          type || "other"
+        )
+          .trim()
+          .toLowerCase(),
+
+      direction:
+        direction === "debit"
+          ? "debit"
+          : "credit",
+
+      amount:
+        numericAmount,
+
+      previousBalance:
+        oldBalance,
+
+      newBalance:
+        updatedBalance,
+
+      status:
+        String(
+          status || "completed"
+        )
+          .trim()
+          .toLowerCase(),
+
+      referenceId:
+        String(
+          referenceId || ""
+        ).trim(),
+
+      description:
+        String(
+          description || ""
+        ).trim(),
+
+      metadata:
+        metadata &&
+        typeof metadata === "object"
+          ? metadata
+          : {},
+
+      createdAt:
+        admin.firestore
+          .FieldValue
+          .serverTimestamp()
+    }
+  );
+
+
+  return ledgerRef;
+}
 
 // ============================================================
 // 🎂 BATTLE X7 ARENA — BIRTHDAY SYSTEM
@@ -316,7 +497,6 @@ function birthdayCalculateAge(dob) {
   return age;
 }
 
-
 // ------------------------------------------------------------
 // CHECK BIRTHDAY
 // ------------------------------------------------------------
@@ -346,7 +526,6 @@ function birthdayIsToday(dob) {
   );
 }
 
-
 // ------------------------------------------------------------
 // CURRENT YEAR
 // ------------------------------------------------------------
@@ -357,7 +536,6 @@ function birthdayCurrentYear() {
     .getFullYear();
 
 }
-
 
 // ------------------------------------------------------------
 // DEFAULT SETTINGS
@@ -381,7 +559,6 @@ function birthdayDefaultSettings() {
   };
 
 }
-
 
 // ------------------------------------------------------------
 // GET ADMIN BIRTHDAY SETTINGS
@@ -422,7 +599,6 @@ async function getBirthdaySettings() {
     return defaults;
   }
 }
-
 
 // ------------------------------------------------------------
 // CREATE IN-APP NOTIFICATION
@@ -479,7 +655,6 @@ async function createBirthdayNotification(
   });
 
 }
-
 
 // ------------------------------------------------------------
 // PROCESS ONE USER
@@ -720,7 +895,6 @@ async function runBirthdayCheck() {
 
 }
 
-
 // ------------------------------------------------------------
 // SCHEDULE NEXT INDIA-MIDNIGHT CHECK
 // ------------------------------------------------------------
@@ -770,7 +944,6 @@ function scheduleBirthdayCheck() {
   );
 
 }
-
 
 // ============================================================
 // DATABASE INITIALIZATION
@@ -850,7 +1023,6 @@ async function initDatabase() {
   );
 }
 
-
 // ============================================================
 // DATABASE HEALTH
 // ============================================================
@@ -889,7 +1061,6 @@ app.get(
     }
   }
 );
-
 
 // ============================================================
 // REFERRAL VALIDATE
@@ -994,7 +1165,6 @@ app.get(
     }
   }
 );
-
 
 // ============================================================
 // USER REGISTRATION + REFERRAL + DEVICE LOCK
@@ -1486,6 +1656,7 @@ app.post(
 
 // ============================================================
 // REFERRAL REWARD
+// STEP 1E — UNIVERSAL WALLET LEDGER
 // ============================================================
 
 async function creditReferralReward(
@@ -1501,9 +1672,33 @@ async function creditReferralReward(
     throw new Error(
       "Firebase server reward configuration is missing"
     );
+
   }
 
+
   const reward = 10;
+
+
+  const referralHistoryId =
+    String(
+      referralRow.referral_history_id
+    ).trim();
+
+
+  const inviterUserId =
+    String(
+      referralRow.inviter_user_id || ""
+    ).trim();
+
+
+  if (!inviterUserId) {
+
+    throw new Error(
+      "Inviter user ID is missing"
+    );
+
+  }
+
 
   const referralRef =
     firestore
@@ -1511,8 +1706,9 @@ async function creditReferralReward(
         "referralHistory"
       )
       .doc(
-        referralRow.referral_history_id
+        referralHistoryId
       );
+
 
   const referrerRef =
     firestore
@@ -1520,10 +1716,9 @@ async function creditReferralReward(
         "users"
       )
       .doc(
-        String(
-          referralRow.inviter_user_id
-        )
+        inviterUserId
       );
+
 
   const walletTxRef =
     firestore
@@ -1531,27 +1726,50 @@ async function creditReferralReward(
         "walletTransactions"
       )
       .doc(
-        `referral_${referralRow.referral_history_id}`
+        `referral_${referralHistoryId}`
       );
+
+
+  const ledgerTransactionId =
+    `referral_${referralHistoryId}`;
+
+
+  const ledgerRef =
+    createWalletLedgerRef(
+      inviterUserId,
+      ledgerTransactionId
+    );
+
 
   await firestore.runTransaction(
     async (tx) => {
+
+      // --------------------------------------------------------
+      // READ ALL REQUIRED DOCUMENTS FIRST
+      // --------------------------------------------------------
 
       const referralSnap =
         await tx.get(
           referralRef
         );
 
+
       if (!referralSnap.exists) {
 
         throw new Error(
           "Referral history record not found"
         );
+
       }
+
 
       const referral =
         referralSnap.data() ||
         {};
+
+      // --------------------------------------------------------
+      // DUPLICATE REWARD PROTECTION
+      // --------------------------------------------------------
 
       if (
         referral.rewardCredited ===
@@ -1559,30 +1777,83 @@ async function creditReferralReward(
         referral.status ===
           "completed"
       ) {
+
         return;
+
       }
+
 
       const referrerSnap =
         await tx.get(
           referrerRef
         );
 
+
       if (!referrerSnap.exists) {
 
         throw new Error(
           "Inviter user not found"
         );
+
       }
+
+
+      const ledgerSnap =
+        await tx.get(
+          ledgerRef
+        );
+
+      // --------------------------------------------------------
+      // EXTRA LEDGER DUPLICATE PROTECTION
+      // --------------------------------------------------------
+
+      if (ledgerSnap.exists) {
+
+        throw new Error(
+          "REFERRAL_LEDGER_ALREADY_EXISTS"
+        );
+
+      }
+
+
+      const referrerData =
+        referrerSnap.data() ||
+        {};
+
+
+      const previousBalance =
+        Number(
+          referrerData.walletBalance || 0
+        );
+
+
+      if (
+        !Number.isFinite(
+          previousBalance
+        ) ||
+        previousBalance < 0
+      ) {
+
+        throw new Error(
+          "INVALID_WALLET_BALANCE"
+        );
+
+      }
+
+
+      const newBalance =
+        previousBalance +
+        reward;
+
+      // --------------------------------------------------------
+      // UPDATE WALLET BALANCE
+      // --------------------------------------------------------
 
       tx.set(
         referrerRef,
         {
           walletBalance:
-            admin.firestore
-              .FieldValue
-              .increment(
-                reward
-              ),
+            newBalance,
 
           referralRewardsEarned:
             admin.firestore
@@ -1601,11 +1872,64 @@ async function creditReferralReward(
         }
       );
 
+      // --------------------------------------------------------
+      // UNIVERSAL WALLET LEDGER
+      // --------------------------------------------------------
+
+      addWalletLedgerEntry(
+        tx,
+        {
+          userId:
+            inviterUserId,
+
+          transactionId:
+            ledgerTransactionId,
+
+          type:
+            "referral",
+
+          direction:
+            "credit",
+
+          amount:
+            reward,
+
+          previousBalance,
+
+          newBalance,
+
+          status:
+            "completed",
+
+          referenceId:
+            referralHistoryId,
+
+          description:
+            "Referral reward after 2 paid matches",
+
+          metadata: {
+            referredUserId:
+              String(
+                referralRow.referred_user_id ||
+                ""
+              ).trim(),
+
+            requiredPaidMatches:
+              2
+          }
+        }
+      );
+
+      // --------------------------------------------------------
+      // EXISTING WALLET TRANSACTION
+      // KEEP THIS FOR CURRENT APP COMPATIBILITY
+      // --------------------------------------------------------
+
       tx.set(
         walletTxRef,
         {
           userId:
-            referralRow.inviter_user_id,
+            inviterUserId,
 
           type:
             "referral",
@@ -1640,6 +1964,11 @@ async function creditReferralReward(
           merge: false
         }
       );
+
+
+      // --------------------------------------------------------
+      // COMPLETE REFERRAL HISTORY
+      // --------------------------------------------------------
 
       tx.set(
         referralRef,
@@ -1676,8 +2005,10 @@ async function creditReferralReward(
           merge: true
         }
       );
+
     }
   );
+
 }
 
 // ============================================================
@@ -1893,6 +2224,526 @@ app.post(
   }
 );
 
+ // ============================================================
+// ADMIN DEPOSIT APPROVE / REJECT
+// STEP 1D
+// ============================================================
+
+
+// ------------------------------------------------------------
+// APPROVE DEPOSIT
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/deposit/:requestId/approve",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!pool) {
+        return res.status(503).json({
+          ok: false,
+          error: "Database not configured"
+        });
+      }
+
+
+      const requestId =
+        String(
+          req.params.requestId || ""
+        ).trim();
+
+
+      if (!requestId) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "INVALID_DEPOSIT_REQUEST"
+        });
+      }
+
+
+      // --------------------------------------------------------
+      // Read deposit from PostgreSQL
+      // --------------------------------------------------------
+
+      const depositResult =
+        await pool.query(
+          `
+          SELECT
+            id,
+            user_id,
+            amount,
+            utr,
+            status
+          FROM deposit_requests
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [requestId]
+        );
+
+
+      if (
+        depositResult.rowCount === 0
+      ) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "DEPOSIT_REQUEST_NOT_FOUND"
+        });
+      }
+
+
+      const deposit =
+        depositResult.rows[0];
+
+
+      if (
+        deposit.status !==
+        "pending"
+      ) {
+        return res.status(409).json({
+          ok: false,
+          error:
+            "DEPOSIT_ALREADY_PROCESSED"
+        });
+      }
+
+
+      const userId =
+        String(
+          deposit.user_id || ""
+        ).trim();
+
+
+      const amount =
+        Number(
+          deposit.amount
+        );
+
+
+      if (
+        !userId ||
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "INVALID_DEPOSIT_REQUEST"
+        });
+      }
+
+
+      const adminUid =
+        req.user &&
+        req.user.uid
+          ? req.user.uid
+          : "";
+
+
+      // --------------------------------------------------------
+      // Credit wallet + create ledger
+      // --------------------------------------------------------
+
+      const walletResult =
+        await firestore.runTransaction(
+          async (tx) => {
+
+            const userRef =
+              firestore
+                .collection("users")
+                .doc(userId);
+
+
+            const ledgerRef =
+              createWalletLedgerRef(
+                userId,
+                `deposit_${requestId}`
+              );
+
+
+            const userSnap =
+              await tx.get(
+                userRef
+              );
+
+
+            if (!userSnap.exists) {
+              throw new Error(
+                "USER_NOT_FOUND"
+              );
+            }
+
+
+            const ledgerSnap =
+              await tx.get(
+                ledgerRef
+              );
+
+
+            // --------------------------------------------------
+            // Idempotency:
+            // If this deposit was already credited,
+            // do NOT credit the wallet again.
+            // --------------------------------------------------
+
+            if (
+              ledgerSnap.exists
+            ) {
+
+              const existingLedger =
+                ledgerSnap.data();
+
+
+              return {
+                alreadyCredited:
+                  true,
+
+                newBalance:
+                  Number(
+                    existingLedger.newBalance ||
+                    0
+                  )
+              };
+            }
+
+
+            const userData =
+              userSnap.data();
+
+
+            const previousBalance =
+              Number(
+                userData.walletBalance || 0
+              );
+
+
+            if (
+              !Number.isFinite(
+                previousBalance
+              ) ||
+              previousBalance < 0
+            ) {
+              throw new Error(
+                "INVALID_WALLET_BALANCE"
+              );
+            }
+
+
+            const newBalance =
+              previousBalance +
+              amount;
+
+
+            tx.update(
+              userRef,
+              {
+                walletBalance:
+                  newBalance
+              }
+            );
+
+
+            addWalletLedgerEntry(
+              tx,
+              {
+                userId,
+
+                transactionId:
+                  `deposit_${requestId}`,
+
+                type:
+                  "deposit",
+
+                direction:
+                  "credit",
+
+                amount,
+
+                previousBalance,
+
+                newBalance,
+
+                status:
+                  "completed",
+
+                referenceId:
+                  requestId,
+
+                description:
+                  "Deposit approved and wallet credited",
+
+                metadata: {
+                  approvedBy:
+                    adminUid
+                }
+              }
+            );
+
+
+            return {
+              alreadyCredited:
+                false,
+
+              newBalance
+            };
+
+          }
+        );
+
+
+      // --------------------------------------------------------
+      // Mark PostgreSQL request approved
+      // --------------------------------------------------------
+
+      const updateResult =
+        await pool.query(
+          `
+          UPDATE deposit_requests
+          SET
+            status = 'approved'
+          WHERE
+            id = $1
+            AND status = 'pending'
+          RETURNING id
+          `,
+          [requestId]
+        );
+
+
+      // Another request/process may have changed
+      // the PostgreSQL status after wallet credit.
+      // Do not credit again because ledger is idempotent.
+
+      if (
+        updateResult.rowCount === 0
+      ) {
+
+        const currentStatus =
+          await pool.query(
+            `
+            SELECT status
+            FROM deposit_requests
+            WHERE id = $1
+            LIMIT 1
+            `,
+            [requestId]
+          );
+
+
+        if (
+          currentStatus.rowCount &&
+          currentStatus.rows[0].status ===
+            "approved"
+        ) {
+          return res.json({
+            ok: true,
+            success: true,
+            status: "approved",
+            requestId,
+            amount,
+            newBalance:
+              walletResult.newBalance,
+            alreadyProcessed:
+              true
+          });
+        }
+
+
+        return res.status(409).json({
+          ok: false,
+          error:
+            "DEPOSIT_STATUS_UPDATE_FAILED"
+        });
+      }
+
+
+      return res.json({
+        ok: true,
+        success: true,
+        status: "approved",
+        requestId,
+        amount,
+        newBalance:
+          walletResult.newBalance,
+        alreadyCredited:
+          walletResult.alreadyCredited
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN DEPOSIT APPROVE ERROR:",
+        error
+      );
+
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "USER_NOT_FOUND"
+        });
+      }
+
+
+      if (
+        error.message ===
+        "INVALID_WALLET_BALANCE"
+      ) {
+        return res.status(500).json({
+          ok: false,
+          error:
+            "INVALID_WALLET_BALANCE"
+        });
+      }
+
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "DEPOSIT_APPROVE_FAILED"
+      });
+
+    }
+
+  }
+);
+
+
+// ------------------------------------------------------------
+// REJECT DEPOSIT
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/deposit/:requestId/reject",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!pool) {
+        return res.status(503).json({
+          ok: false,
+          error:
+            "Database not configured"
+        });
+      }
+
+
+      const requestId =
+        String(
+          req.params.requestId || ""
+        ).trim();
+
+
+      if (!requestId) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "INVALID_DEPOSIT_REQUEST"
+        });
+      }
+
+
+      const result =
+        await pool.query(
+          `
+          UPDATE deposit_requests
+          SET
+            status = 'rejected'
+          WHERE
+            id = $1
+            AND status = 'pending'
+          RETURNING
+            id,
+            user_id,
+            amount
+          `,
+          [requestId]
+        );
+
+
+      if (
+        result.rowCount === 0
+      ) {
+
+        const existing =
+          await pool.query(
+            `
+            SELECT
+              id,
+              status
+            FROM deposit_requests
+            WHERE id = $1
+            LIMIT 1
+            `,
+            [requestId]
+          );
+
+
+        if (
+          existing.rowCount === 0
+        ) {
+          return res.status(404).json({
+            ok: false,
+            error:
+              "DEPOSIT_REQUEST_NOT_FOUND"
+          });
+        }
+
+
+        return res.status(409).json({
+          ok: false,
+          error:
+            "DEPOSIT_ALREADY_PROCESSED"
+        });
+      }
+
+
+      const rejectedDeposit =
+        result.rows[0];
+
+
+      return res.json({
+        ok: true,
+        success: true,
+        status: "rejected",
+        requestId:
+          rejectedDeposit.id,
+        amount:
+          Number(
+            rejectedDeposit.amount
+          )
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN DEPOSIT REJECT ERROR:",
+        error
+      );
+
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "DEPOSIT_REJECT_FAILED"
+      });
+
+    }
+
+  }
+);
+
 // ------------------------------------------------------------
 // WITHDRAWAL REQUEST
 // ------------------------------------------------------------
@@ -2055,6 +2906,661 @@ app.post(
                   admin.firestore
                     .FieldValue
                     .serverTimestamp()
+              }
+            );
+
+// ============================================================
+// ADMIN WITHDRAWAL APPROVE / REJECT
+// STEP 1C
+// ============================================================
+
+// ------------------------------------------------------------
+// APPROVE WITHDRAWAL
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/withdrawal/:requestId/approve",
+  async (req, res) => {
+
+    try {
+
+      const adminUser =
+        await requireAdmin(
+          req,
+          res
+        );
+
+      if (!adminUser) return;
+
+
+      const requestId =
+        String(
+          req.params.requestId || ""
+        ).trim();
+
+
+      if (!requestId) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Withdrawal request ID is required"
+        });
+
+      }
+
+
+      const requestRef =
+        firestore
+          .collection(
+            "withdrawalRequests"
+          )
+          .doc(requestId);
+
+
+      await firestore.runTransaction(
+        async (tx) => {
+
+          const requestSnap =
+            await tx.get(
+              requestRef
+            );
+
+
+          if (!requestSnap.exists) {
+
+            throw new Error(
+              "WITHDRAWAL_REQUEST_NOT_FOUND"
+            );
+
+          }
+
+
+          const request =
+            requestSnap.data() || {};
+
+
+          const status =
+            String(
+              request.status || ""
+            )
+              .trim()
+              .toLowerCase();
+
+
+          if (status !== "pending") {
+
+            throw new Error(
+              "WITHDRAWAL_ALREADY_PROCESSED"
+            );
+
+          }
+
+
+          const userId =
+            String(
+              request.userId || ""
+            ).trim();
+
+
+          const amount =
+            Number(
+              request.amount || 0
+            );
+
+
+          if (
+            !userId ||
+            !Number.isFinite(amount) ||
+            amount <= 0
+          ) {
+
+            throw new Error(
+              "INVALID_WITHDRAWAL_REQUEST"
+            );
+
+          }
+
+
+          const userRef =
+            firestore
+              .collection("users")
+              .doc(userId);
+
+
+          const userSnap =
+            await tx.get(
+              userRef
+            );
+
+
+          if (!userSnap.exists) {
+
+            throw new Error(
+              "USER_NOT_FOUND"
+            );
+
+          }
+
+
+          const user =
+            userSnap.data() || {};
+
+
+          const balance =
+            Number(
+              user.walletBalance || 0
+            );
+
+
+          const ledgerRef =
+            createWalletLedgerRef(
+              userId,
+              requestId
+            );
+
+
+          tx.update(
+            ledgerRef,
+            {
+              status:
+                "completed",
+
+              updatedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            }
+          );
+
+
+          tx.update(
+            requestRef,
+            {
+              status:
+                "approved",
+
+              approvedBy:
+                adminUser.uid,
+
+              approvedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            }
+          );
+
+        }
+      );
+
+
+      return res.json({
+        ok: true,
+
+        requestId,
+
+        status:
+          "approved",
+
+        message:
+          "Withdrawal approved successfully"
+      });
+
+
+    } catch (error) {
+
+      if (
+        error.message ===
+        "WITHDRAWAL_REQUEST_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Withdrawal request not found"
+        });
+
+      }
+
+
+      if (
+        error.message ===
+        "WITHDRAWAL_ALREADY_PROCESSED"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Withdrawal request has already been processed"
+        });
+
+      }
+
+
+      if (
+        error.message ===
+        "INVALID_WITHDRAWAL_REQUEST"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid withdrawal request"
+        });
+
+      }
+
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User not found"
+        });
+
+      }
+
+
+      console.error(
+        "WITHDRAWAL APPROVAL ERROR:",
+        error
+      );
+
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to approve withdrawal"
+      });
+
+    }
+
+  }
+);
+
+// ------------------------------------------------------------
+// REJECT WITHDRAWAL + REFUND
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/withdrawal/:requestId/reject",
+  async (req, res) => {
+
+    try {
+
+      const adminUser =
+        await requireAdmin(
+          req,
+          res
+        );
+
+      if (!adminUser) return;
+
+
+      const requestId =
+        String(
+          req.params.requestId || ""
+        ).trim();
+
+
+      if (!requestId) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Withdrawal request ID is required"
+        });
+
+      }
+
+
+      const requestRef =
+        firestore
+          .collection(
+            "withdrawalRequests"
+          )
+          .doc(requestId);
+
+
+      const result =
+        await firestore.runTransaction(
+          async (tx) => {
+
+            const requestSnap =
+              await tx.get(
+                requestRef
+              );
+
+
+            if (!requestSnap.exists) {
+
+              throw new Error(
+                "WITHDRAWAL_REQUEST_NOT_FOUND"
+              );
+
+            }
+
+
+            const request =
+              requestSnap.data() || {};
+
+
+            const status =
+              String(
+                request.status || ""
+              )
+                .trim()
+                .toLowerCase();
+
+
+            if (status !== "pending") {
+
+              throw new Error(
+                "WITHDRAWAL_ALREADY_PROCESSED"
+              );
+
+            }
+
+
+            const userId =
+              String(
+                request.userId || ""
+              ).trim();
+
+
+            const amount =
+              Number(
+                request.amount || 0
+              );
+
+
+            if (
+              !userId ||
+              !Number.isFinite(amount) ||
+              amount <= 0
+            ) {
+
+              throw new Error(
+                "INVALID_WITHDRAWAL_REQUEST"
+              );
+
+            }
+
+
+            const userRef =
+              firestore
+                .collection("users")
+                .doc(userId);
+
+
+            const userSnap =
+              await tx.get(
+                userRef
+              );
+
+
+            if (!userSnap.exists) {
+
+              throw new Error(
+                "USER_NOT_FOUND"
+              );
+
+            }
+
+
+            const user =
+              userSnap.data() || {};
+
+
+            const balance =
+              Number(
+                user.walletBalance || 0
+              );
+
+
+            const newBalance =
+              balance + amount;
+
+
+            const originalLedgerRef =
+              createWalletLedgerRef(
+                userId,
+                requestId
+              );
+
+
+            const refundTransactionId =
+              requestId +
+              "_refund";
+
+
+            const refundLedgerRef =
+              createWalletLedgerRef(
+                userId,
+                refundTransactionId
+              );
+
+            // Mark original withdrawal ledger
+            // as rejected.
+
+            tx.update(
+              originalLedgerRef,
+              {
+                status:
+                  "rejected",
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+
+            // Return the money to wallet.
+
+            tx.update(
+              userRef,
+              {
+                walletBalance:
+                  newBalance,
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+
+            // Create refund ledger entry.
+
+            addWalletLedgerEntry(
+              tx,
+              {
+                userId,
+
+                transactionId:
+                  refundTransactionId,
+
+                type:
+                  "withdrawal_refund",
+
+                direction:
+                  "credit",
+
+                amount,
+
+                previousBalance:
+                  balance,
+
+                newBalance,
+
+                status:
+                  "completed",
+
+                referenceId:
+                  requestId,
+
+                description:
+                  "Withdrawal rejected and amount refunded"
+              }
+            );
+
+
+            tx.update(
+              requestRef,
+              {
+                status:
+                  "rejected",
+
+                rejectedBy:
+                  adminUser.uid,
+
+                rejectedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+
+
+            return newBalance;
+
+          }
+        );
+
+
+      return res.json({
+        ok: true,
+
+        requestId,
+
+        status:
+          "rejected",
+
+        refundedAmount:
+  Number(
+    request.amount || 0
+  ),
+
+        message:
+          "Withdrawal rejected and amount refunded successfully"
+      });
+
+
+    } catch (error) {
+
+      if (
+        error.message ===
+        "WITHDRAWAL_REQUEST_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Withdrawal request not found"
+        });
+
+      }
+
+
+      if (
+        error.message ===
+        "WITHDRAWAL_ALREADY_PROCESSED"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Withdrawal request has already been processed"
+        });
+
+      }
+
+
+      if (
+        error.message ===
+        "INVALID_WITHDRAWAL_REQUEST"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid withdrawal request"
+        });
+
+      }
+
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User not found"
+        });
+
+      }
+
+
+      console.error(
+        "WITHDRAWAL REJECTION ERROR:",
+        error
+      );
+
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Failed to reject withdrawal"
+      });
+
+    }
+
+  }
+);
+
+            // ============================================================
+            // WALLET LEDGER — WITHDRAWAL
+            // STEP 1B
+            // ============================================================
+
+            addWalletLedgerEntry(
+              tx,
+              {
+                userId,
+
+                transactionId:
+                  requestRef.id,
+
+                type:
+                  "withdrawal",
+
+                direction:
+                  "debit",
+
+                amount,
+
+                previousBalance:
+                  balance,
+
+                newBalance:
+                  balance - amount,
+
+                status:
+                  "pending",
+
+                referenceId:
+                  requestRef.id,
+
+                description:
+                  "Withdrawal request submitted"
               }
             );
 
@@ -2279,6 +3785,568 @@ initWalletDatabase()
 
     }
   );
+
+// ============================================================
+// BATTLE X7 ARENA — SECURE TOURNAMENT JOIN + ENTRY FEE
+// STEP 1F
+// ============================================================
+
+app.post(
+  "/tournament/join",
+  async (req, res) => {
+
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!decoded) return;
+
+
+    if (
+      !firebaseReady ||
+      !firestore
+    ) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase server verification is not configured"
+      });
+    }
+
+
+    const tournamentId =
+      String(
+        req.body?.tournamentId || ""
+      ).trim();
+
+
+    if (!tournamentId) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Tournament ID is required"
+      });
+    }
+
+
+    try {
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(decoded.uid);
+
+
+      const tournamentRef =
+        firestore
+          .collection("tournaments")
+          .doc(tournamentId);
+
+
+      /*
+       * Deterministic ledger ID.
+       *
+       * Same user + same tournament
+       * can never create a second
+       * tournament-entry debit.
+       */
+      const ledgerId =
+        `tournament_entry_${decoded.uid}_${tournamentId}`;
+
+
+      const ledgerRef =
+        userRef
+          .collection("walletLedger")
+          .doc(ledgerId);
+
+
+      const result =
+        await firestore.runTransaction(
+          async (tx) => {
+
+            const userSnap =
+              await tx.get(userRef);
+
+
+            if (!userSnap.exists) {
+              throw new Error(
+                "USER_NOT_FOUND"
+              );
+            }
+
+
+            const tournamentSnap =
+              await tx.get(
+                tournamentRef
+              );
+
+
+            if (!tournamentSnap.exists) {
+              throw new Error(
+                "TOURNAMENT_NOT_FOUND"
+              );
+            }
+
+
+            const ledgerSnap =
+              await tx.get(
+                ledgerRef
+              );
+
+
+            /*
+             * Existing ledger means this
+             * tournament entry has already
+             * been charged.
+             */
+            if (ledgerSnap.exists) {
+
+              const ledger =
+                ledgerSnap.data() || {};
+
+              return {
+                alreadyJoined: true,
+
+                newBalance:
+                  Number(
+                    ledger.newBalance || 0
+                  ),
+
+                entryFee:
+                  Number(
+                    ledger.amount || 0
+                  ),
+
+                joinRequestId:
+                  String(
+                    ledger.referenceId || ""
+                  )
+              };
+            }
+
+
+            const user =
+              userSnap.data() || {};
+
+
+            const tournament =
+              tournamentSnap.data() || {};
+
+
+            const entryFee =
+              Number(
+                tournament.entryFee ??
+                tournament.entry ??
+                0
+              );
+
+
+            if (
+              !Number.isFinite(entryFee) ||
+              entryFee < 0
+            ) {
+              throw new Error(
+                "INVALID_ENTRY_FEE"
+              );
+            }
+
+
+            const tournamentStatus =
+              String(
+                tournament.status || ""
+              )
+                .trim()
+                .toLowerCase();
+
+
+            if (
+              [
+                "complete",
+                "completed",
+                "cancelled",
+                "canceled",
+                "closed"
+              ].includes(
+                tournamentStatus
+              )
+            ) {
+              throw new Error(
+                "TOURNAMENT_NOT_AVAILABLE"
+              );
+            }
+
+
+            const slots =
+              Number(
+                tournament.slots ??
+                tournament.totalSlots ??
+                tournament.maxPlayers ??
+                0
+              );
+
+
+            const filledSlots =
+              Number(
+                tournament.filledSlots ??
+                tournament.joined ??
+                tournament.joinedPlayers ??
+                0
+              );
+
+
+            if (
+              slots > 0 &&
+              filledSlots >= slots
+            ) {
+              throw new Error(
+                "TOURNAMENT_FULL"
+              );
+            }
+
+
+            const currentBalance =
+              Number(
+                user.walletBalance || 0
+              );
+
+
+            if (
+              !Number.isFinite(
+                currentBalance
+              ) ||
+              currentBalance < 0
+            ) {
+              throw new Error(
+                "INVALID_WALLET_BALANCE"
+              );
+            }
+
+
+            if (
+              entryFee > currentBalance
+            ) {
+              throw new Error(
+                "INSUFFICIENT_BALANCE"
+              );
+            }
+
+
+            /*
+             * Create join request inside
+             * the SAME transaction.
+             */
+            const joinRequestRef =
+              firestore
+                .collection(
+                  "joinRequests"
+                )
+                .doc();
+
+
+            const newBalance =
+              currentBalance -
+              entryFee;
+
+
+            tx.set(
+              joinRequestRef,
+              {
+                userId:
+                  decoded.uid,
+
+                userEmail:
+                  decoded.email || "",
+
+                username:
+                  String(
+                    user.username ||
+                    decoded.name ||
+                    "Player"
+                  ),
+
+                freeFireName:
+                  String(
+                    user.freeFireName || ""
+                  ),
+
+                freeFireUid:
+                  String(
+                    user.freeFireUid || ""
+                  ),
+
+                photoUrl:
+                  String(
+                    user.photoUrl || ""
+                  ),
+
+                tournamentId,
+
+                tournamentTitle:
+                  String(
+                    tournament.title ||
+                    tournament.name ||
+                    "Tournament"
+                  ),
+
+                entryFee,
+
+                status:
+                  "pending",
+
+                paymentStatus:
+                  entryFee > 0
+                    ? "paid"
+                    : "free",
+
+                paymentConfirmed:
+                  entryFee > 0,
+
+                paymentSuccess:
+                  entryFee > 0,
+
+                paid:
+                  entryFee > 0,
+
+                createdAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp(),
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+
+
+            /*
+             * Deduct wallet balance in
+             * the SAME Firestore transaction.
+             */
+            tx.update(
+              userRef,
+              {
+                walletBalance:
+                  newBalance,
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              }
+            );
+
+
+            /*
+             * Universal wallet ledger.
+             *
+             * This records exactly:
+             *
+             * OLD BALANCE
+             * - ENTRY FEE
+             * = NEW BALANCE
+             */
+            addWalletLedgerEntry(
+              tx,
+              {
+                userId:
+                  decoded.uid,
+
+                transactionId:
+                  ledgerId,
+
+                type:
+                  "tournament_entry",
+
+                direction:
+                  "debit",
+
+                amount:
+                  entryFee,
+
+                previousBalance:
+                  currentBalance,
+
+                newBalance,
+
+                status:
+                  "completed",
+
+                referenceId:
+                  joinRequestRef.id,
+
+                description:
+                  `Tournament Entry — ${
+                    tournament.title ||
+                    tournament.name ||
+                    "Tournament"
+                  }`,
+
+                metadata: {
+                  tournamentId,
+
+                  tournamentTitle:
+                    String(
+                      tournament.title ||
+                      tournament.name ||
+                      ""
+                    ),
+
+                  joinRequestId:
+                    joinRequestRef.id
+                }
+              }
+            );
+
+
+            return {
+              alreadyJoined: false,
+
+              joinRequestId:
+                joinRequestRef.id,
+
+              newBalance,
+
+              entryFee
+            };
+          }
+        );
+
+
+      return res.json({
+        ok: true,
+
+        alreadyJoined:
+          result.alreadyJoined === true,
+
+        joined:
+          true,
+
+        joinRequestId:
+          result.joinRequestId || "",
+
+        entryFee:
+          Number(
+            result.entryFee || 0
+          ),
+
+        newBalance:
+          Number(
+            result.newBalance || 0
+          )
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "TOURNAMENT JOIN ERROR:",
+        error
+      );
+
+
+      const code =
+        String(
+          error?.message || ""
+        );
+
+
+      if (
+        code ===
+        "USER_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User profile not found"
+        });
+      }
+
+
+      if (
+        code ===
+        "TOURNAMENT_NOT_FOUND"
+      ) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Tournament not found"
+        });
+      }
+
+
+      if (
+        code ===
+        "INVALID_ENTRY_FEE"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid tournament entry fee"
+        });
+      }
+
+
+      if (
+        code ===
+        "TOURNAMENT_NOT_AVAILABLE"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Tournament is no longer available"
+        });
+      }
+
+
+      if (
+        code ===
+        "TOURNAMENT_FULL"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Tournament is full"
+        });
+      }
+
+
+      if (
+        code ===
+        "INVALID_WALLET_BALANCE"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid wallet balance"
+        });
+      }
+
+
+      if (
+        code ===
+        "INSUFFICIENT_BALANCE"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Insufficient wallet balance"
+        });
+      }
+
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Tournament join failed"
+      });
+
+    }
+  }
+);
 
 // ============================================================
 // REAL PAID MATCH
