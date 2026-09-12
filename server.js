@@ -8499,6 +8499,91 @@ app.get("/api/test-openai", async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// TEMPORARY GEMINI + OPENAI AVAILABLE MODELS TEST
+// ============================================================
+app.get("/api/test-ai-models", async (req, res) => {
+  const result = {
+    gemini: null,
+    openai: null
+  };
+
+  // ==========================================================
+  // GEMINI AVAILABLE MODELS
+  // ==========================================================
+  try {
+    if (!gemini) {
+      result.gemini = {
+        ok: false,
+        error: "Gemini client not initialized"
+      };
+    } else {
+      const geminiModels = [];
+
+      for await (const model of gemini.models.list()) {
+        const actions = Array.isArray(model.supportedActions)
+          ? model.supportedActions
+          : [];
+
+        if (actions.includes("generateContent")) {
+          geminiModels.push({
+            name: model.name,
+            displayName: model.displayName || null,
+            supportedActions: actions
+          });
+        }
+      }
+
+      result.gemini = {
+        ok: true,
+        count: geminiModels.length,
+        models: geminiModels
+      };
+    }
+  } catch (error) {
+    console.error("Gemini model list error:", error);
+
+    result.gemini = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+  // ==========================================================
+  // OPENAI AVAILABLE MODELS
+  // ==========================================================
+  try {
+    const openaiModels = await openai.models.list();
+
+    const models = [];
+
+    for await (const model of openaiModels) {
+      models.push({
+        id: model.id,
+        owned_by: model.owned_by || null
+      });
+    }
+
+    result.openai = {
+      ok: true,
+      count: models.length,
+      models
+    };
+  } catch (error) {
+    console.error("OpenAI model list error:", error);
+
+    result.openai = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+  return res.json({
+    ok: Boolean(result.gemini?.ok && result.openai?.ok),
+    ...result
+  });
+});
     
 // ============================================================
 // START SERVER
