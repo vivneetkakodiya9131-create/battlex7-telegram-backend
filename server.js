@@ -8690,15 +8690,12 @@ const response = await x7EnqueueAI(async () => {
   }
 });
 
-const reply =
-  typeof response?.output_text === "string"
-    ? response.output_text.trim()
-    : String(
-        response?.output_text?.value ||
-        response?.output_text?.text ||
-        response?.output_text ||
-        ""
-      ).trim();
+const reply = String(
+  response?.output_text ||
+  response?.output?.[0]?.content?.[0]?.text ||
+  response?.output?.[0]?.content?.[0]?.value ||
+  ""
+).trim();
     
     if (!reply) {
       return res.status(502).json({
