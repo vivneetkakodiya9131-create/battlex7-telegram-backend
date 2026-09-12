@@ -8342,6 +8342,8 @@ const response = await openai.responses.create({
   ok: false,
   error: "AI Arena request failed"
 });
+      }
+});
     
 // ============================================================
 // START SERVER
