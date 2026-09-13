@@ -585,7 +585,6 @@ app.post(
 
 // ============================================================
 // UNIVERSAL WALLET LEDGER
-// STEP 1A
 // ============================================================
 
 function createWalletLedgerRef(
@@ -4101,563 +4100,555 @@ initWalletDatabase()
   );
 
 // ============================================================
-// BATTLE X7 ARENA — SECURE TOURNAMENT JOIN + ENTRY FEE
-// STEP 1F
+// BATTLE X7 ARENA — TOURNAMENT RESULT SETTLEMENT
+// Result → Winning → Wallet → Leaderboard
 // ============================================================
 
 app.post(
-  "/tournament/join",
+  "/admin/tournament/result",
   async (req, res) => {
 
-    const decoded =
-      await requireFirebaseUser(
+    const adminUser =
+      await requireMasterAdmin(
         req,
         res
       );
 
-    if (!decoded) return;
+    if (!adminUser) return;
 
-
-    if (
-      !firebaseReady ||
-      !firestore
-    ) {
+    if (!firebaseReady) {
       return res.status(503).json({
         ok: false,
-        error:
-          "Firebase server verification is not configured"
+        error: "Firebase not configured"
       });
     }
-
 
     const tournamentId =
       String(
         req.body?.tournamentId || ""
       ).trim();
 
+    const results =
+      Array.isArray(
+        req.body?.results
+      )
+        ? req.body.results.slice(0, 200)
+        : [];
 
-    if (!tournamentId) {
+    if (
+      !tournamentId ||
+      !results.length
+    ) {
       return res.status(400).json({
         ok: false,
         error:
-          "Tournament ID is required"
+          "tournamentId and results are required"
       });
     }
 
-
     try {
 
-      const userRef =
-        firestore
-          .collection("users")
-          .doc(decoded.uid);
+      const settled = [];
 
+      for (const item of results) {
 
-      const tournamentRef =
-        firestore
-          .collection("tournaments")
-          .doc(tournamentId);
+        const userId =
+          String(
+            item?.userId || ""
+          ).trim();
 
+        const joinRequestId =
+          String(
+            item?.joinRequestId || ""
+          ).trim();
 
-      /*
-       * Deterministic ledger ID.
-       *
-       * Same user + same tournament
-       * can never create a second
-       * tournament-entry debit.
-       */
-      const ledgerId =
-        `tournament_entry_${decoded.uid}_${tournamentId}`;
+        const rank =
+          Number(
+            item?.rank || 0
+          );
 
+        const kills =
+          Number(
+            item?.kills || 0
+          );
 
-      const ledgerRef =
-        userRef
-          .collection("walletLedger")
-          .doc(ledgerId);
+        const prizeWon =
+          Number(
+            item?.prizeWon ??
+            item?.winningAmount ??
+            item?.winningsAmount ??
+            0
+          );
 
+        if (
+          !userId ||
+          !joinRequestId ||
+          !Number.isFinite(rank) ||
+          rank < 0 ||
+          !Number.isFinite(kills) ||
+          kills < 0 ||
+          !Number.isFinite(prizeWon) ||
+          prizeWon < 0
+        ) {
 
-      const result =
-        await firestore.runTransaction(
-          async (tx) => {
+          settled.push({
+            userId,
+            success: false,
+            error:
+              "Invalid result row"
+          });
 
-            const userSnap =
-              await tx.get(userRef);
+          continue;
+        }
 
+        try {
 
-            if (!userSnap.exists) {
-              throw new Error(
-                "USER_NOT_FOUND"
-              );
-            }
+          const outcome =
+            await firestore.runTransaction(
+              async (tx) => {
 
+                const userRef =
+                  firestore
+                    .collection("users")
+                    .doc(userId);
 
-            const tournamentSnap =
-              await tx.get(
-                tournamentRef
-              );
+                const joinRef =
+                  firestore
+                    .collection("joinRequests")
+                    .doc(joinRequestId);
 
+                const resultRef =
+                  firestore
+                    .collection("tournaments")
+                    .doc(tournamentId)
+                    .collection("results")
+                    .doc(userId);
 
-            if (!tournamentSnap.exists) {
-              throw new Error(
-                "TOURNAMENT_NOT_FOUND"
-              );
-            }
+                const tournamentRef =
+                  firestore
+                    .collection("tournaments")
+                    .doc(tournamentId);
 
+                const userSnap =
+                  await tx.get(userRef);
 
-            const ledgerSnap =
-              await tx.get(
-                ledgerRef
-              );
+                const joinSnap =
+                  await tx.get(joinRef);
 
+                const resultSnap =
+                  await tx.get(resultRef);
 
-            /*
-             * Existing ledger means this
-             * tournament entry has already
-             * been charged.
-             */
-            if (ledgerSnap.exists) {
+                const tournamentSnap =
+                  await tx.get(
+                    tournamentRef
+                  );
 
-              const ledger =
-                ledgerSnap.data() || {};
+                if (!userSnap.exists) {
+                  throw new Error(
+                    "RESULT_USER_NOT_FOUND"
+                  );
+                }
 
-              return {
-                alreadyJoined: true,
+                if (!joinSnap.exists) {
+                  throw new Error(
+                    "JOIN_REQUEST_NOT_FOUND"
+                  );
+                }
 
-                newBalance:
-                  Number(
-                    ledger.newBalance || 0
-                  ),
+                const join =
+                  joinSnap.data() || {};
 
-                entryFee:
-                  Number(
-                    ledger.amount || 0
-                  ),
-
-                joinRequestId:
+                if (
                   String(
-                    ledger.referenceId || ""
-                  )
-              };
-            }
+                    join.userId || ""
+                  ) !== userId ||
+                  String(
+                    join.tournamentId || ""
+                  ) !== tournamentId
+                ) {
+                  throw new Error(
+                    "RESULT_JOIN_MISMATCH"
+                  );
+                }
 
+                // Prevent duplicate winning credit
+                if (
+                  resultSnap.exists &&
+                  (
+                    resultSnap.data() || {}
+                  ).settled === true
+                ) {
 
-            const user =
-              userSnap.data() || {};
+                  const oldResult =
+                    resultSnap.data() || {};
 
+                  return {
+                    duplicate: true,
+                    prizeWon:
+                      Number(
+                        oldResult.prizeWon || 0
+                      ),
+                    rank:
+                      Number(
+                        oldResult.rank || 0
+                      ),
+                    kills:
+                      Number(
+                        oldResult.kills || 0
+                      )
+                  };
+                }
 
-            const tournament =
-              tournamentSnap.data() || {};
+                const now =
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp();
 
+                const user =
+                  userSnap.data() || {};
 
-            const entryFee =
-              Number(
-                tournament.entryFee ??
-                tournament.entry ??
-                0
-              );
+                const tournament =
+                  tournamentSnap.exists
+                    ? (
+                        tournamentSnap.data() || {}
+                      )
+                    : {};
 
-
-            if (
-              !Number.isFinite(entryFee) ||
-              entryFee < 0
-            ) {
-              throw new Error(
-                "INVALID_ENTRY_FEE"
-              );
-            }
-
-
-            const tournamentStatus =
-              String(
-                tournament.status || ""
-              )
-                .trim()
-                .toLowerCase();
-
-
-            if (
-              [
-                "complete",
-                "completed",
-                "cancelled",
-                "canceled",
-                "closed"
-              ].includes(
-                tournamentStatus
-              )
-            ) {
-              throw new Error(
-                "TOURNAMENT_NOT_AVAILABLE"
-              );
-            }
-
-
-            const slots =
-              Number(
-                tournament.slots ??
-                tournament.totalSlots ??
-                tournament.maxPlayers ??
-                0
-              );
-
-
-            const filledSlots =
-              Number(
-                tournament.filledSlots ??
-                tournament.joined ??
-                tournament.joinedPlayers ??
-                0
-              );
-
-
-            if (
-              slots > 0 &&
-              filledSlots >= slots
-            ) {
-              throw new Error(
-                "TOURNAMENT_FULL"
-              );
-            }
-
-
-            const currentBalance =
-              Number(
-                user.walletBalance || 0
-              );
-
-
-            if (
-              !Number.isFinite(
-                currentBalance
-              ) ||
-              currentBalance < 0
-            ) {
-              throw new Error(
-                "INVALID_WALLET_BALANCE"
-              );
-            }
-
-
-            if (
-              entryFee > currentBalance
-            ) {
-              throw new Error(
-                "INSUFFICIENT_BALANCE"
-              );
-            }
-
-
-            /*
-             * Create join request inside
-             * the SAME transaction.
-             */
-            const joinRequestRef =
-              firestore
-                .collection(
-                  "joinRequests"
-                )
-                .doc();
-
-
-            const newBalance =
-              currentBalance -
-              entryFee;
-
-
-            tx.set(
-              joinRequestRef,
-              {
-                userId:
-                  decoded.uid,
-
-                userEmail:
-                  decoded.email || "",
-
-                username:
+                const userName =
                   String(
                     user.username ||
-                    decoded.name ||
+                    user.freeFireName ||
+                    user.name ||
                     "Player"
-                  ),
+                  );
 
-                freeFireName:
-                  String(
-                    user.freeFireName || ""
-                  ),
+                const currentBalance =
+                  Number(
+                    user.walletBalance || 0
+                  );
 
-                freeFireUid:
-                  String(
-                    user.freeFireUid || ""
-                  ),
+                const newBalance =
+                  currentBalance +
+                  prizeWon;
 
-                photoUrl:
-                  String(
-                    user.photoUrl || ""
-                  ),
-
-                tournamentId,
-
-                tournamentTitle:
-                  String(
-                    tournament.title ||
-                    tournament.name ||
-                    "Tournament"
-                  ),
-
-                entryFee,
-
-                status:
-                  "pending",
-
-                paymentStatus:
-                  entryFee > 0
-                    ? "paid"
-                    : "free",
-
-                paymentConfirmed:
-                  entryFee > 0,
-
-                paymentSuccess:
-                  entryFee > 0,
-
-                paid:
-                  entryFee > 0,
-
-                createdAt:
-                  admin.firestore
-                    .FieldValue
-                    .serverTimestamp(),
-
-                updatedAt:
-                  admin.firestore
-                    .FieldValue
-                    .serverTimestamp()
-              }
-            );
-
-
-            /*
-             * Deduct wallet balance in
-             * the SAME Firestore transaction.
-             */
-            tx.update(
-              userRef,
-              {
-                walletBalance:
-                  newBalance,
-
-                updatedAt:
-                  admin.firestore
-                    .FieldValue
-                    .serverTimestamp()
-              }
-            );
-
-
-            /*
-             * Universal wallet ledger.
-             *
-             * This records exactly:
-             *
-             * OLD BALANCE
-             * - ENTRY FEE
-             * = NEW BALANCE
-             */
-            addWalletLedgerEntry(
-              tx,
-              {
-                userId:
-                  decoded.uid,
-
-                transactionId:
-                  ledgerId,
-
-                type:
-                  "tournament_entry",
-
-                direction:
-                  "debit",
-
-                amount:
-                  entryFee,
-
-                previousBalance:
-                  currentBalance,
-
-                newBalance,
-
-                status:
-                  "completed",
-
-                referenceId:
-                  joinRequestRef.id,
-
-                description:
-                  `Tournament Entry — ${
-                    tournament.title ||
-                    tournament.name ||
-                    "Tournament"
-                  }`,
-
-                metadata: {
+                const resultData = {
+                  userId,
                   tournamentId,
+                  joinRequestId,
 
-                  tournamentTitle:
-                    String(
-                      tournament.title ||
-                      tournament.name ||
-                      ""
+                  rank:
+                    Math.max(
+                      0,
+                      Math.floor(rank)
                     ),
 
-                  joinRequestId:
-                    joinRequestRef.id
+                  kills:
+                    Math.max(
+                      0,
+                      Math.floor(kills)
+                    ),
+
+                  prizeWon,
+
+                  settled: true,
+
+                  settledBy:
+                    adminUser.uid,
+
+                  settledAt: now,
+                  createdAt: now,
+                  updatedAt: now
+                };
+
+                // ------------------------------------------------
+                // 1. SAVE TOURNAMENT RESULT
+                // ------------------------------------------------
+
+                tx.set(
+                  resultRef,
+                  resultData,
+                  {
+                    merge: true
+                  }
+                );
+
+                // ------------------------------------------------
+                // 2. UPDATE JOIN REQUEST
+                // ------------------------------------------------
+
+                tx.set(
+                  joinRef,
+                  {
+                    resultStatus:
+                      "settled",
+
+                    rank:
+                      resultData.rank,
+
+                    kills:
+                      resultData.kills,
+
+                    winningsAmount:
+                      prizeWon,
+
+                    prizeWon,
+
+                    winningAmount:
+                      prizeWon,
+
+                    resultUpdatedAt:
+                      now,
+
+                    updatedAt:
+                      now
+                  },
+                  {
+                    merge: true
+                  }
+                );
+
+                // ------------------------------------------------
+                // 3. CREDIT WALLET
+                // ------------------------------------------------
+
+                if (prizeWon > 0) {
+
+                  tx.update(
+                    userRef,
+                    {
+                      walletBalance:
+                        newBalance,
+
+                      updatedAt:
+                        now
+                    }
+                  );
+
+                  // ------------------------------------------------
+                  // 4. WALLET LEDGER
+                  // ------------------------------------------------
+
+                  addWalletLedgerEntry(
+                    tx,
+                    {
+                      userId,
+
+                      transactionId:
+                        `tournament_win_${tournamentId}_${joinRequestId}`,
+
+                      type:
+                        "tournament_winning",
+
+                      direction:
+                        "credit",
+
+                      amount:
+                        prizeWon,
+
+                      previousBalance:
+                        currentBalance,
+
+                      newBalance,
+
+                      status:
+                        "completed",
+
+                      referenceId:
+                        joinRequestId,
+
+                      description:
+                        `${String(
+                          tournament.title ||
+                          tournament.name ||
+                          tournamentId
+                        )} • Rank #${
+                          resultData.rank || "-"
+                        } • ${
+                          resultData.kills
+                        } kills`,
+
+                      metadata: {
+                        tournamentId,
+                        joinRequestId,
+                        rank:
+                          resultData.rank,
+                        kills:
+                          resultData.kills,
+                        prizeWon
+                      }
+                    }
+                  );
                 }
+
+                // ------------------------------------------------
+                // 5. UPDATE LEADERBOARD DATA
+                // ------------------------------------------------
+
+                tx.set(
+                  userRef,
+                  {
+                    totalEarnings:
+                      admin.firestore
+                        .FieldValue
+                        .increment(
+                          prizeWon
+                        ),
+
+                    earnings:
+                      admin.firestore
+                        .FieldValue
+                        .increment(
+                          prizeWon
+                        ),
+
+                    totalWins:
+                      admin.firestore
+                        .FieldValue
+                        .increment(
+                          resultData.rank === 1
+                            ? 1
+                            : 0
+                        ),
+
+                    wins:
+                      admin.firestore
+                        .FieldValue
+                        .increment(
+                          resultData.rank === 1
+                            ? 1
+                            : 0
+                        ),
+
+                    totalKills:
+                      admin.firestore
+                        .FieldValue
+                        .increment(
+                          resultData.kills
+                        ),
+
+                    kills:
+                      admin.firestore
+                        .FieldValue
+                        .increment(
+                          resultData.kills
+                        ),
+
+                    updatedAt:
+                      now
+                  },
+                  {
+                    merge: true
+                  }
+                );
+
+                // ------------------------------------------------
+                // 6. PLAYER NOTIFICATION
+                // ------------------------------------------------
+
+                const notificationRef =
+                  userRef
+                    .collection(
+                      "notifications"
+                    )
+                    .doc();
+
+                tx.set(
+                  notificationRef,
+                  {
+                    type:
+                      prizeWon > 0
+                        ? "winning"
+                        : "result",
+
+                    title:
+                      prizeWon > 0
+                        ? "Tournament Winning"
+                        : "Match Result",
+
+                    message:
+                      prizeWon > 0
+                        ? `You finished #${
+                            resultData.rank || "-"
+                          } and won ₹${prizeWon}.`
+                        : `Your tournament result is now available. Rank #${
+                            resultData.rank || "-"
+                          }, ${
+                            resultData.kills
+                          } kills.`,
+
+                    tournamentId,
+
+                    joinRequestId,
+
+                    read: false,
+
+                    createdAt:
+                      now,
+
+                    updatedAt:
+                      now
+                  }
+                );
+
+                return {
+                  duplicate: false,
+
+                  userName,
+
+                  prizeWon,
+
+                  rank:
+                    resultData.rank,
+
+                  kills:
+                    resultData.kills,
+
+                  newBalance
+                };
               }
             );
 
+          settled.push({
+            userId,
+            success: true,
+            ...outcome
+          });
 
-            return {
-              alreadyJoined: false,
+        } catch (error) {
 
-              joinRequestId:
-                joinRequestRef.id,
+          console.error(
+            "TOURNAMENT RESULT ROW ERROR:",
+            error
+          );
 
-              newBalance,
-
-              entryFee
-            };
-          }
-        );
-
+          settled.push({
+            userId,
+            success: false,
+            error:
+              error?.message ||
+              "Failed to settle result"
+          });
+        }
+      }
 
       return res.json({
         ok: true,
-
-        alreadyJoined:
-          result.alreadyJoined === true,
-
-        joined:
-          true,
-
-        joinRequestId:
-          result.joinRequestId || "",
-
-        entryFee:
-          Number(
-            result.entryFee || 0
-          ),
-
-        newBalance:
-          Number(
-            result.newBalance || 0
-          )
+        tournamentId,
+        settled
       });
-
 
     } catch (error) {
 
       console.error(
-        "TOURNAMENT JOIN ERROR:",
+        "TOURNAMENT RESULT ERROR:",
         error
       );
-
-
-      const code =
-        String(
-          error?.message || ""
-        );
-
-
-      if (
-        code ===
-        "USER_NOT_FOUND"
-      ) {
-        return res.status(404).json({
-          ok: false,
-          error:
-            "User profile not found"
-        });
-      }
-
-
-      if (
-        code ===
-        "TOURNAMENT_NOT_FOUND"
-      ) {
-        return res.status(404).json({
-          ok: false,
-          error:
-            "Tournament not found"
-        });
-      }
-
-
-      if (
-        code ===
-        "INVALID_ENTRY_FEE"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Invalid tournament entry fee"
-        });
-      }
-
-
-      if (
-        code ===
-        "TOURNAMENT_NOT_AVAILABLE"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Tournament is no longer available"
-        });
-      }
-
-
-      if (
-        code ===
-        "TOURNAMENT_FULL"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Tournament is full"
-        });
-      }
-
-
-      if (
-        code ===
-        "INVALID_WALLET_BALANCE"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Invalid wallet balance"
-        });
-      }
-
-
-      if (
-        code ===
-        "INSUFFICIENT_BALANCE"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Insufficient wallet balance"
-        });
-      }
-
 
       return res.status(500).json({
         ok: false,
         error:
-          "Tournament join failed"
+          "Failed to settle tournament result"
       });
-
     }
   }
 );
