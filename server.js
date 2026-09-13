@@ -4654,6 +4654,669 @@ app.post(
 );
 
 // ============================================================
+// BATTLE X7 ARENA — ADMIN NOTIFICATION API
+// Single User + Broadcast Notification
+// ============================================================
+
+// ------------------------------------------------------------
+// SEND NOTIFICATION TO ONE USER
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/notification/send",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const userId =
+        String(
+          req.body?.userId || ""
+        ).trim();
+
+      const title =
+        String(
+          req.body?.title || ""
+        ).trim();
+
+      const message =
+        String(
+          req.body?.message || ""
+        ).trim();
+
+      const type =
+        String(
+          req.body?.type ||
+          "admin"
+        ).trim();
+
+      if (!userId) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "userId is required"
+        });
+      }
+
+      if (!title) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification title is required"
+        });
+      }
+
+      if (!message) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification message is required"
+        });
+      }
+
+      if (
+        title.length > 200 ||
+        message.length > 4000 ||
+        type.length > 80
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification data is too long"
+        });
+      }
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(userId);
+
+      const userSnap =
+        await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User not found"
+        });
+      }
+
+      const notificationRef =
+        userRef
+          .collection("notifications")
+          .doc();
+
+      const now =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      await notificationRef.set({
+        type,
+
+        title,
+
+        message,
+
+        read: false,
+
+        createdAt: now,
+
+        updatedAt: now,
+
+        sentBy:
+          adminUser.uid,
+
+        source:
+          "admin"
+      });
+
+      return res.json({
+        ok: true,
+
+        notificationId:
+          notificationRef.id,
+
+        userId,
+
+        message:
+          "Notification sent successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN NOTIFICATION SEND ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Notification send nahi ho saki"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// BROADCAST NOTIFICATION TO ALL USERS
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/notification/broadcast",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const title =
+        String(
+          req.body?.title || ""
+        ).trim();
+
+      const message =
+        String(
+          req.body?.message || ""
+        ).trim();
+
+      const type =
+        String(
+          req.body?.type ||
+          "announcement"
+        ).trim();
+
+      if (!title) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification title is required"
+        });
+      }
+
+      if (!message) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification message is required"
+        });
+      }
+
+      if (
+        title.length > 200 ||
+        message.length > 4000 ||
+        type.length > 80
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification data is too long"
+        });
+      }
+
+      const usersSnap =
+        await firestore
+          .collection("users")
+          .get();
+
+      if (usersSnap.empty) {
+        return res.json({
+          ok: true,
+          sent: 0,
+          message:
+            "No users found"
+        });
+      }
+
+      const users =
+        usersSnap.docs;
+
+      let sent = 0;
+
+      let batch =
+        firestore.batch();
+
+      let batchCount = 0;
+
+      for (
+        const userDoc of users
+      ) {
+
+        const notificationRef =
+          userDoc.ref
+            .collection(
+              "notifications"
+            )
+            .doc();
+
+        batch.set(
+          notificationRef,
+          {
+            type,
+
+            title,
+
+            message,
+
+            read: false,
+
+            createdAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp(),
+
+            updatedAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp(),
+
+            sentBy:
+              adminUser.uid,
+
+            source:
+              "admin"
+          }
+        );
+
+        sent++;
+
+        batchCount++;
+
+        if (batchCount >= 400) {
+
+          await batch.commit();
+
+          batch =
+            firestore.batch();
+
+          batchCount = 0;
+        }
+      }
+
+      if (batchCount > 0) {
+        await batch.commit();
+      }
+
+      return res.json({
+        ok: true,
+
+        sent,
+
+        message:
+          "Broadcast notification sent successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN NOTIFICATION BROADCAST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Broadcast notification send nahi ho saki"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — USER NOTIFICATION API
+// List + Unread Count + Mark Read
+// ============================================================
+
+// ------------------------------------------------------------
+// GET USER NOTIFICATIONS
+// ------------------------------------------------------------
+
+app.get(
+  "/notifications",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const snapshot =
+        await firestore
+          .collection("users")
+          .doc(user.uid)
+          .collection("notifications")
+          .orderBy(
+            "createdAt",
+            "desc"
+          )
+          .limit(100)
+          .get();
+
+      const notifications =
+        snapshot.docs.map(
+          (doc) => ({
+            id: doc.id,
+            ...doc.data()
+          })
+        );
+
+      const unreadCount =
+        notifications.filter(
+          (item) =>
+            item.read !== true
+        ).length;
+
+      return res.json({
+        ok: true,
+        notifications,
+        unreadCount
+      });
+
+    } catch (error) {
+
+      console.error(
+        "USER NOTIFICATION LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Notifications load nahi ho saki"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// GET UNREAD NOTIFICATION COUNT
+// ------------------------------------------------------------
+
+app.get(
+  "/notifications/unread-count",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const snapshot =
+        await firestore
+          .collection("users")
+          .doc(user.uid)
+          .collection("notifications")
+          .where(
+            "read",
+            "==",
+            false
+          )
+          .limit(100)
+          .get();
+
+      return res.json({
+        ok: true,
+        unreadCount:
+          snapshot.size
+      });
+
+    } catch (error) {
+
+      console.error(
+        "UNREAD NOTIFICATION COUNT ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Unread notification count load nahi ho saka"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// MARK ONE NOTIFICATION AS READ
+// ------------------------------------------------------------
+
+app.patch(
+  "/notifications/:notificationId/read",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const notificationId =
+        String(
+          req.params.notificationId ||
+          ""
+        ).trim();
+
+      if (
+        !notificationId ||
+        !/^[A-Za-z0-9_-]{1,200}$/.test(
+          notificationId
+        )
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid notificationId"
+        });
+      }
+
+      const notificationRef =
+        firestore
+          .collection("users")
+          .doc(user.uid)
+          .collection("notifications")
+          .doc(notificationId);
+
+      const notificationSnap =
+        await notificationRef.get();
+
+      if (!notificationSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Notification not found"
+        });
+      }
+
+      await notificationRef.update({
+        read: true,
+        readAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp()
+      });
+
+      return res.json({
+        ok: true,
+        notificationId,
+        read: true
+      });
+
+    } catch (error) {
+
+      console.error(
+        "MARK NOTIFICATION READ ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Notification read mark nahi ho saki"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// MARK ALL NOTIFICATIONS AS READ
+// ------------------------------------------------------------
+
+app.patch(
+  "/notifications/read-all",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const snapshot =
+        await firestore
+          .collection("users")
+          .doc(user.uid)
+          .collection("notifications")
+          .where(
+            "read",
+            "==",
+            false
+          )
+          .limit(400)
+          .get();
+
+      if (snapshot.empty) {
+        return res.json({
+          ok: true,
+          updated: 0
+        });
+      }
+
+      const batch =
+        firestore.batch();
+
+      snapshot.docs.forEach(
+        (doc) => {
+
+          batch.update(
+            doc.ref,
+            {
+              read: true,
+
+              readAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            }
+          );
+        }
+      );
+
+      await batch.commit();
+
+      return res.json({
+        ok: true,
+        updated:
+          snapshot.size
+      });
+
+    } catch (error) {
+
+      console.error(
+        "MARK ALL NOTIFICATIONS READ ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "All notifications read mark nahi ho sakin"
+      });
+    }
+  }
+);
+
+// ============================================================
 // REAL PAID MATCH
 // ============================================================
 
@@ -7227,7 +7890,6 @@ app.get(
   }
 );
 
-
 // ============================================================
 // HEALTH
 // ============================================================
@@ -7266,7 +7928,6 @@ app.get(
     });
   }
 );
-
 
 // ============================================================
 // SEND SUPPORT TICKET
@@ -7733,6 +8394,184 @@ app.post(
         ok: false,
         error:
           "Message send nahi ho saka"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN SUPPORT TICKET LIST API
+// Admin → All Support Tickets
+// ============================================================
+
+app.get(
+  "/admin/support/tickets",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const snap =
+        await firestore
+          .collection("supportTickets")
+          .orderBy("updatedAt", "desc")
+          .limit(100)
+          .get();
+
+      const tickets = [];
+
+      snap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        tickets.push({
+          id: doc.id,
+          ...data
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+        tickets
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN SUPPORT TICKET LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Support tickets load nahi ho sake"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN SUPPORT TICKET DETAIL API
+// Admin → Complete Ticket + Messages
+// ============================================================
+
+app.get(
+  "/admin/support/ticket/:ticketId",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const ticketId =
+      String(
+        req.params.ticketId || ""
+      ).trim();
+
+    if (!ticketId) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "ticketId is required"
+      });
+    }
+
+    try {
+
+      const ticketRef =
+        firestore
+          .collection("supportTickets")
+          .doc(ticketId);
+
+      const ticketSnap =
+        await ticketRef.get();
+
+      if (!ticketSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Ticket not found"
+        });
+      }
+
+      const ticket =
+        ticketSnap.data() || {};
+
+      const messagesSnap =
+        await ticketRef
+          .collection("messages")
+          .orderBy(
+            "createdAt",
+            "asc"
+          )
+          .limit(500)
+          .get();
+
+      const messages = [];
+
+      messagesSnap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        messages.push({
+          id: doc.id,
+          ...data
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+
+        ticket: {
+          id:
+            ticketSnap.id,
+          ...ticket
+        },
+
+        messages
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN SUPPORT TICKET DETAIL ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Ticket detail load nahi ho saka"
       });
     }
   }
@@ -10606,7 +11445,7 @@ try {
       : null;
 
   // ========================================================
-  // CASE 1 — USER ASKS TO CREATE A TICKET
+  // USER ASKS TO CREATE A TICKET
   // ========================================================
 
   if (explicitTicketRequest) {
@@ -10798,7 +11637,7 @@ try {
   }
 
   // ========================================================
-  // CASE 2 — USER SENDS SCREENSHOT / VIDEO
+  // USER SENDS SCREENSHOT / VIDEO
   // ========================================================
 
   if (
@@ -11255,7 +12094,7 @@ OR
 
 
   // ========================================================
-  // CASE 3 — FINAL CONFIRMATION
+  // FINAL CONFIRMATION
   // ========================================================
 
   if (
