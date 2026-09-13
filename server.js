@@ -2545,9 +2545,7 @@ app.post(
 
  // ============================================================
 // ADMIN DEPOSIT APPROVE / REJECT
-// STEP 1D
 // ============================================================
-
 
 // ------------------------------------------------------------
 // APPROVE DEPOSIT
@@ -2581,7 +2579,6 @@ app.post(
             "INVALID_DEPOSIT_REQUEST"
         });
       }
-
 
       // --------------------------------------------------------
       // Read deposit from PostgreSQL
@@ -2701,7 +2698,6 @@ app.post(
               await tx.get(
                 ledgerRef
               );
-
 
             // --------------------------------------------------
             // Idempotency:
@@ -2935,7 +2931,6 @@ app.post(
 
   }
 );
-
 
 // ------------------------------------------------------------
 // REJECT DEPOSIT
@@ -6484,7 +6479,6 @@ app.post(
 // REMOTE ICON CONTROL + MASTER ADMIN CONTROL
 // ============================================================
 
-
 // ------------------------------------------------------------
 // MASTER ADMIN AUTHENTICATION
 // ------------------------------------------------------------
@@ -7432,6 +7426,612 @@ The user will be asked for this proof in Telegram.
   }
 );
 
+// ============================================================
+// BATTLE X7 ARENA — SUPPORT TICKET API
+// Secure ticket list + ticket detail
+// ============================================================
+
+app.get(
+  "/support/tickets",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(req, res);
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const uid = user.uid;
+
+      const snap =
+        await firestore
+          .collection("supportTickets")
+          .where("userId", "==", uid)
+          .orderBy("createdAt", "desc")
+          .limit(50)
+          .get();
+
+      const tickets = [];
+
+      snap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        tickets.push({
+          id: doc.id,
+          ...data
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+        tickets
+      });
+
+    } catch (error) {
+
+      console.error(
+        "SUPPORT TICKET LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Support tickets load nahi ho sake"
+      });
+    }
+  }
+);
+
+// ============================================================
+// SUPPORT TICKET DETAIL
+// ============================================================
+
+app.get(
+  "/support/ticket/:ticketId",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(req, res);
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const ticketId =
+      String(
+        req.params.ticketId || ""
+      ).trim();
+
+    if (!ticketId) {
+      return res.status(400).json({
+        ok: false,
+        error: "ticketId is required"
+      });
+    }
+
+    try {
+
+      const ticketRef =
+        firestore
+          .collection("supportTickets")
+          .doc(ticketId);
+
+      const ticketSnap =
+        await ticketRef.get();
+
+      if (!ticketSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "Ticket not found"
+        });
+      }
+
+      const ticket =
+        ticketSnap.data() || {};
+
+      // User can only open their own ticket
+      if (
+        String(ticket.userId || "") !==
+        String(user.uid)
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error: "Access denied"
+        });
+      }
+
+      const messagesSnap =
+        await ticketRef
+          .collection("messages")
+          .orderBy("createdAt", "asc")
+          .limit(200)
+          .get();
+
+      const messages = [];
+
+      messagesSnap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        messages.push({
+          id: doc.id,
+          ...data
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+        ticket: {
+          id: ticketSnap.id,
+          ...ticket
+        },
+        messages
+      });
+
+    } catch (error) {
+
+      console.error(
+        "SUPPORT TICKET DETAIL ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Ticket detail load nahi ho saka"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — SUPPORT TICKET MESSAGE API
+// Secure user message → ticket messages
+// ============================================================
+
+app.post(
+  "/support/ticket/:ticketId/message",
+  async (req, res) => {
+
+    const user =
+      await requireFirebaseUser(req, res);
+
+    if (!user) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const ticketId =
+      String(
+        req.params.ticketId || ""
+      ).trim();
+
+    const message =
+      String(
+        req.body?.message || ""
+      ).trim();
+
+    if (!ticketId || !message) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "ticketId and message are required"
+      });
+    }
+
+    if (message.length > 4000) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Message is too long"
+      });
+    }
+
+    try {
+
+      const ticketRef =
+        firestore
+          .collection("supportTickets")
+          .doc(ticketId);
+
+      const ticketSnap =
+        await ticketRef.get();
+
+      if (!ticketSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "Ticket not found"
+        });
+      }
+
+      const ticket =
+        ticketSnap.data() || {};
+
+      // User can only send messages to their own ticket
+      
+      if (
+        String(ticket.userId || "") !==
+        String(user.uid)
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error: "Access denied"
+        });
+      }
+
+      const now =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      const messageRef =
+        ticketRef
+          .collection("messages")
+          .doc();
+
+      await messageRef.set({
+        senderId: user.uid,
+        senderType: "user",
+        message,
+        text: message,
+        read: false,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      await ticketRef.set(
+        {
+          lastMessage: message,
+          lastMessageAt: now,
+          updatedAt: now,
+          status:
+            ticket.status === "closed"
+              ? "open"
+              : (
+                  ticket.status ||
+                  "open"
+                )
+        },
+        {
+          merge: true
+        }
+      );
+
+      return res.json({
+        ok: true,
+        message: {
+          id: messageRef.id,
+          senderId: user.uid,
+          senderType: "user",
+          message,
+          text: message
+        }
+      });
+
+    } catch (error) {
+
+      console.error(
+        "SUPPORT TICKET MESSAGE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Message send nahi ho saka"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN SUPPORT REPLY API
+// Admin → User ticket reply
+// ============================================================
+
+app.post(
+  "/admin/support/ticket/:ticketId/message",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const ticketId =
+      String(
+        req.params.ticketId || ""
+      ).trim();
+
+    const message =
+      String(
+        req.body?.message || ""
+      ).trim();
+
+    if (!ticketId || !message) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "ticketId and message are required"
+      });
+    }
+
+    if (message.length > 4000) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Message is too long"
+      });
+    }
+
+    try {
+
+      const ticketRef =
+        firestore
+          .collection("supportTickets")
+          .doc(ticketId);
+
+      const ticketSnap =
+        await ticketRef.get();
+
+      if (!ticketSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "Ticket not found"
+        });
+      }
+
+      const ticket =
+        ticketSnap.data() || {};
+
+      const now =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      const messageRef =
+        ticketRef
+          .collection("messages")
+          .doc();
+
+      await messageRef.set({
+        senderId: adminUser.uid,
+        senderType: "admin",
+        message,
+        text: message,
+        read: false,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      await ticketRef.set(
+        {
+          lastMessage: message,
+          lastMessageAt: now,
+          updatedAt: now,
+          status: "open",
+          lastRepliedBy: "admin"
+        },
+        {
+          merge: true
+        }
+      );
+
+      // Notify ticket owner
+      if (ticket.userId) {
+
+        const notificationRef =
+          firestore
+            .collection("users")
+            .doc(
+              String(ticket.userId)
+            )
+            .collection("notifications")
+            .doc();
+
+        await notificationRef.set({
+          type: "support",
+          title: "Support Team Reply",
+          message:
+            "Your support ticket has a new reply.",
+          ticketId,
+          read: false,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
+
+      return res.json({
+        ok: true,
+        message: {
+          id: messageRef.id,
+          senderId: adminUser.uid,
+          senderType: "admin",
+          message,
+          text: message
+        }
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN SUPPORT REPLY ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Support reply send nahi ho saka"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN SUPPORT TICKET STATUS API
+// Admin → Close / Reopen Ticket
+// ============================================================
+
+app.patch(
+  "/admin/support/ticket/:ticketId/status",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const ticketId =
+      String(
+        req.params.ticketId || ""
+      ).trim();
+
+    const status =
+      String(
+        req.body?.status || ""
+      ).trim().toLowerCase();
+
+    if (
+      !ticketId ||
+      !["open", "closed"].includes(status)
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "ticketId and valid status are required"
+      });
+    }
+
+    try {
+
+      const ticketRef =
+        firestore
+          .collection("supportTickets")
+          .doc(ticketId);
+
+      const ticketSnap =
+        await ticketRef.get();
+
+      if (!ticketSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "Ticket not found"
+        });
+      }
+
+      const now =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      await ticketRef.set(
+        {
+          status,
+          updatedAt: now,
+          statusUpdatedBy: adminUser.uid,
+          statusUpdatedAt: now
+        },
+        {
+          merge: true
+        }
+      );
+
+      const ticket =
+        ticketSnap.data() || {};
+
+      if (ticket.userId) {
+
+        const notificationRef =
+          firestore
+            .collection("users")
+            .doc(
+              String(ticket.userId)
+            )
+            .collection("notifications")
+            .doc();
+
+        await notificationRef.set({
+          type: "support",
+          title:
+            status === "closed"
+              ? "Ticket Closed"
+              : "Ticket Reopened",
+          message:
+            status === "closed"
+              ? `Your support ticket #${ticketId} has been closed.`
+              : `Your support ticket #${ticketId} has been reopened.`,
+          ticketId,
+          read: false,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
+
+      return res.json({
+        ok: true,
+        ticketId,
+        status
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN SUPPORT STATUS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Ticket status update nahi ho saka"
+      });
+    }
+  }
+);
 
 // ============================================================
 // TELEGRAM WEBHOOK
@@ -7551,6 +8151,75 @@ This will connect your Telegram chat with your support ticket.`
             );
         }
 
+// ============================================================
+// BATTLE X7 ARENA — CONNECT TELEGRAM CHAT TO FIRESTORE TICKET
+// ============================================================
+
+if (
+  firebaseReady &&
+  ticketId
+) {
+
+  try {
+
+    const supportTicketRef =
+      firestore
+        .collection("supportTickets")
+        .doc(String(ticketId));
+
+    const supportTicketSnap =
+      await supportTicketRef.get();
+
+    if (supportTicketSnap.exists) {
+
+      await supportTicketRef.set(
+        {
+          telegramChatId:
+            String(chatId),
+
+          telegramUsername:
+            String(
+              message.from?.username || ""
+            ).slice(0, 160),
+
+          telegramUserId:
+            String(
+              message.from?.id || ""
+            ),
+
+          telegramProofType:
+            proofType,
+
+          telegramConnected:
+            true,
+
+          telegramConnectedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp()
+        },
+        {
+          merge: true
+        }
+      );
+
+    }
+
+  } catch (telegramTicketSyncError) {
+
+    console.error(
+      "TELEGRAM TICKET SYNC ERROR:",
+      telegramTicketSyncError
+    );
+
+  }
+}
+
         if (
           proofType ===
           "video"
@@ -7617,6 +8286,113 @@ Once received, our support team will review it.`
         const caption =
           message.caption ||
           "No caption";
+
+// ============================================================
+// BATTLE X7 ARENA — TELEGRAM PHOTO PROOF → FIRESTORE
+// ============================================================
+
+if (
+  firebaseReady &&
+  ticketId
+) {
+
+  try {
+
+    const supportTicketRef =
+      firestore
+        .collection("supportTickets")
+        .doc(String(ticketId));
+
+    const supportTicketSnap =
+      await supportTicketRef.get();
+
+    if (supportTicketSnap.exists) {
+
+      const proofMessageRef =
+        supportTicketRef
+          .collection("messages")
+          .doc();
+
+      await proofMessageRef.set({
+        senderId:
+          String(
+            message.from?.id || ""
+          ),
+
+        senderType:
+          "user",
+
+        message:
+          caption,
+
+        text:
+          caption,
+
+        messageType:
+          "image",
+
+        proofType:
+          "image",
+
+        telegramFileId:
+          String(
+            photo.file_id || ""
+          ),
+
+        telegramChatId:
+          String(chatId),
+
+        read:
+          false,
+
+        createdAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        updatedAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp()
+      });
+
+      await supportTicketRef.set(
+        {
+          lastMessage:
+            caption,
+
+          lastMessageAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          proofReceived:
+            true,
+
+          proofType:
+            "image"
+        },
+        {
+          merge: true
+        }
+      );
+
+    }
+
+  } catch (firestoreProofError) {
+
+    console.error(
+      "TELEGRAM PHOTO FIRESTORE SYNC ERROR:",
+      firestoreProofError
+    );
+
+  }
+}
 
         const groupCaption =
 `📸 SUPPORT PROOF RECEIVED
@@ -8996,7 +9772,7 @@ app.post("/api/ai/tts", async (req, res) => {
 
 // ============================================================
 // BATTLE X7 ARENA — AI REQUEST QUEUE ENGINE
-// Step 1: Queue foundation
+// Queue foundation
 // ============================================================
 
 const x7AIQueue = {
@@ -9077,6 +9853,7 @@ if (!decoded) return;
 // ----------------------------------------------------------
 // LOAD LOGGED-IN USER PROFILE FROM FIRESTORE
 // ----------------------------------------------------------
+    
 const userRef = firestore
     .collection("users")
     .doc(decoded.uid);
@@ -10538,7 +11315,96 @@ OR
     const telegramUrl =
       `https://t.me/${BOT_USERNAME}?start=${prefix}${ticketId}`;
 
+// ============================================================
+// BATTLE X7 ARENA — SYNC AI ARENA TICKET TO FIRESTORE
+// ============================================================
 
+if (firebaseReady && decoded?.uid) {
+
+  const supportTicketRef =
+    firestore
+      .collection("supportTickets")
+      .doc(String(ticketId));
+
+  const ticketNow =
+    admin.firestore
+      .FieldValue
+      .serverTimestamp();
+
+  await supportTicketRef.set(
+    {
+      ticketId:
+        String(ticketId),
+
+      userId:
+        String(decoded.uid),
+
+      category:
+        "AI ARENA",
+
+      tournamentId:
+        "",
+
+      problemSummary:
+        String(
+          pendingTicket.problem_summary || ""
+        ).slice(0, 300),
+
+      description:
+        String(
+          pendingTicket.description || ""
+        ).slice(0, 4000),
+
+      proofType:
+        proofType === "video"
+          ? "video"
+          : "image",
+
+      status:
+        "open",
+
+      username:
+        String(
+          pendingTicket.username || ""
+        ).slice(0, 160),
+
+      freeFireUid:
+        String(
+          pendingTicket.free_fire_uid || ""
+        ).slice(0, 160),
+
+      freeFireName:
+        String(
+          pendingTicket.free_fire_name || ""
+        ).slice(0, 160),
+
+      email:
+        String(
+          pendingTicket.email || ""
+        ).slice(0, 320),
+
+      mobile:
+        String(
+          currentMobile || ""
+        ).slice(0, 40),
+
+      telegramUrl,
+
+      createdAt:
+        ticketNow,
+
+      updatedAt:
+        ticketNow,
+
+      lastMessageAt:
+        ticketNow
+    },
+    {
+      merge: true
+    }
+  );
+}
+    
     // -----------------------------------------------
     // IMPORTANT:
     // Pending ticket remove only AFTER Telegram success
