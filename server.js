@@ -263,454 +263,307 @@ async function requireFirebaseUser(req, res) {
 }
 
 // ============================================================
-// BATTLE X7 ARENA — SECURE TOURNAMENT JOIN
-// STEP 1F
+// BATTLE X7 ARENA — TOURNAMENT JOIN / ENTRY
+// Server-authoritative wallet deduction + atomic join lock
 // ============================================================
 
 app.post(
   "/tournament/join",
   async (req, res) => {
-
     if (!firebaseReady) {
       return res.status(503).json({
         ok: false,
-        error: "Firebase is not configured"
+        success: false,
+        message: "Firebase server is not configured"
       });
     }
 
-    const decoded =
-      await requireFirebaseUser(
-        req,
-        res
-      );
-
+    const decoded = await requireFirebaseUser(req, res);
     if (!decoded) return;
 
-    const tournamentId =
-      String(
-        req.body?.tournamentId || ""
-      ).trim();
+    const tournamentId = String(req.body?.tournamentId || "").trim();
 
     if (!tournamentId) {
       return res.status(400).json({
         ok: false,
-        error: "Tournament ID is required"
+        success: false,
+        message: "Tournament ID is required"
       });
     }
 
     try {
-
-      const userRef =
-        firestore
-          .collection("users")
-          .doc(decoded.uid);
-
-      const tournamentRef =
-        firestore
-          .collection("tournaments")
-          .doc(tournamentId);
-
-      const joinLockRef =
-  firestore
-    .collection("users")
-    .doc(decoded.uid)
-    .collection("tournamentJoins")
-    .doc(tournamentId);
-
-      const result =
-        await firestore.runTransaction(
-          async (tx) => {
-
-            // --------------------------------------------------
-            // LOAD USER
-            // --------------------------------------------------
-
-            const userSnap =
-              await tx.get(userRef);
-
-            if (!userSnap.exists) {
-              throw new Error(
-                "USER_NOT_FOUND"
-              );
-            }
-
-            const user =
-              userSnap.data() || {};
-
-            const balance =
-              Number(
-                user.walletBalance || 0
-              );
-
-            // --------------------------------------------------
-            // LOAD TOURNAMENT
-            // --------------------------------------------------
-
-            const tournamentSnap =
-              await tx.get(
-                tournamentRef
-              );
-
-            if (!tournamentSnap.exists) {
-              throw new Error(
-                "TOURNAMENT_NOT_FOUND"
-              );
-            }
-
-            const tournament =
-              tournamentSnap.data() || {};
-
-            const entryFee =
-              Number(
-                tournament.entryFee ??
-                tournament.entry ??
-                0
-              );
-
-            if (
-              !Number.isFinite(entryFee) ||
-              entryFee < 0
-            ) {
-              throw new Error(
-                "INVALID_ENTRY_FEE"
-              );
-            }
-
-            // --------------------------------------------------
-            // CHECK DUPLICATE JOIN
-            // --------------------------------------------------
-
-             const joinLockRef =
-  firestore
-    .collection("users")
-    .doc(decoded.uid)
-    .collection("tournamentJoins")
-    .doc(tournamentId);
-
-const joinLockSnap =
-  await tx.get(joinLockRef);
-
-if (joinLockSnap.exists) {
-
-  const lockData =
-    joinLockSnap.data() || {};
-
-  const lockStatus =
-    String(
-      lockData.status || ""
-    )
-      .trim()
-      .toLowerCase();
-
-  if (
-    lockStatus !== "rejected" &&
-    lockStatus !== "cancelled" &&
-    lockStatus !== "canceled"
-  ) {
-    throw new Error(
-      "ALREADY_JOINED"
-    );
-  }
-}
-            
-            // --------------------------------------------------
-            // CHECK BALANCE — PAID TOURNAMENT ONLY
-            // --------------------------------------------------
-
-            if (
-              entryFee > 0 &&
-              balance < entryFee
-            ) {
-              throw new Error(
-                "INSUFFICIENT_BALANCE"
-              );
-            }
-
-            // --------------------------------------------------
-            // CREATE JOIN REQUEST
-            // --------------------------------------------------
-
-            const joinRequestRef =
-              firestore
-                .collection(
-                  "joinRequests"
-                )
-                .doc();
-
-            // --------------------------------------------------
-            // SAVE ATOMIC TOURNAMENT JOIN LOCK
-            // --------------------------------------------------
-
-            tx.set(
-              joinLockRef,
-              {
-                userId:
-                  decoded.uid,
-
-                tournamentId,
-
-                joinRequestId:
-                  joinRequestRef.id,
-
-                status:
-                  entryFee > 0
-                    ? "paid"
-                    : "joined",
-
-                entryFee,
-
-                createdAt:
-                  admin.firestore
-                    .FieldValue
-                    .serverTimestamp(),
-
-                updatedAt:
-                  admin.firestore
-                    .FieldValue
-                    .serverTimestamp()
-              }
-            );
-            
-            const newBalance =
-              balance - entryFee;
-
-            // --------------------------------------------------
-            // UPDATE WALLET
-            // FREE TOURNAMENT = NO DEDUCTION
-            // --------------------------------------------------
-
-            if (entryFee > 0) {
-
-              tx.update(
-                userRef,
-                {
-                  walletBalance:
-                    newBalance,
-
-                  updatedAt:
-                    admin.firestore
-                      .FieldValue
-                      .serverTimestamp()
-                }
-              );
-
-            }
-
-            // --------------------------------------------------
-            // JOIN REQUEST DATA
-            // --------------------------------------------------
-
-            tx.set(
-              joinRequestRef,
-              {
-                userId:
-                  decoded.uid,
-
-                userEmail:
-                  decoded.email || "",
-
-                username:
-                  user.username ||
-                  decoded.name ||
-                  "Player",
-
-                freeFireName:
-                  user.freeFireName ||
-                  "",
-
-                freeFireUid:
-                  user.freeFireUid ||
-                  "",
-
-                photoUrl:
-                  user.photoUrl ||
-                  decoded.picture ||
-                  "",
-
-                tournamentId,
-
-                tournamentTitle:
-                  tournament.title ||
-                  tournament.name ||
-                  "SOLO",
-
-                entryFee,
-
-                status:
-                  entryFee > 0
-                    ? "paid"
-                    : "joined",
-
-                paymentVerified:
-                  entryFee === 0,
-
-                paymentConfirmed:
-                  entryFee === 0,
-
-                paid:
-                  entryFee === 0,
-
-                createdAt:
-                  admin.firestore
-                    .FieldValue
-                    .serverTimestamp()
-              }
-            );
-
-            // --------------------------------------------------
-            // UNIVERSAL WALLET LEDGER
-            // PAID TOURNAMENT ONLY
-            // --------------------------------------------------
-
-            if (entryFee > 0) {
-
-              const ledgerRef =
-                firestore
-                  .collection("users")
-                  .doc(decoded.uid)
-                  .collection("walletLedger")
-                  .doc(
-                    `tournament_${joinRequestRef.id}`
-                  );
-
-              tx.create(
-                ledgerRef,
-                {
-                  transactionId:
-                    `tournament_${joinRequestRef.id}`,
-
-                  userId:
-                    decoded.uid,
-
-                  type:
-                    "tournament_entry",
-
-                  direction:
-                    "debit",
-
-                  amount:
-                    entryFee,
-
-                  previousBalance:
-                    balance,
-
-                  newBalance,
-
-                  status:
-                    "completed",
-
-                  referenceId:
-                    joinRequestRef.id,
-
-                  description:
-                    `Tournament Entry - ${
-                      tournament.title ||
-                      tournament.name ||
-                      tournamentId
-                    }`,
-
-                  metadata: {
-                    tournamentId,
-                    tournamentTitle:
-                      tournament.title ||
-                      tournament.name ||
-                      ""
-                  },
-
-                  createdAt:
-                    admin.firestore
-                      .FieldValue
-                      .serverTimestamp()
-                }
-              );
-
-            }
-
-            return {
-              joinRequestId:
-                joinRequestRef.id,
-
-              newBalance
-            };
-
-          }
-        );
+      const result = await firestore.runTransaction(async (tx) => {
+
+        const userRef =
+          firestore.collection("users").doc(decoded.uid);
+
+        const tournamentRef =
+          firestore.collection("tournaments").doc(tournamentId);
+
+        const joinLockRef =
+          userRef
+            .collection("tournamentJoins")
+            .doc(tournamentId);
+
+        const joinRequestRef =
+          firestore.collection("joinRequests").doc();
+
+        const [userSnap, tournamentSnap, lockSnap] =
+          await Promise.all([
+            tx.get(userRef),
+            tx.get(tournamentRef),
+            tx.get(joinLockRef)
+          ]);
+
+        if (!userSnap.exists) {
+          throw new Error("USER_NOT_FOUND");
+        }
+
+        if (!tournamentSnap.exists) {
+          throw new Error("TOURNAMENT_NOT_FOUND");
+        }
+
+        const user = userSnap.data() || {};
+        const tournament = tournamentSnap.data() || {};
+
+        const lockData =
+          lockSnap.exists ? (lockSnap.data() || {}) : {};
+
+        const lockStatus =
+          String(lockData.status || "")
+            .trim()
+            .toLowerCase();
+
+        if (
+          lockSnap.exists &&
+          !["rejected", "cancelled", "canceled"]
+            .includes(lockStatus)
+        ) {
+          throw new Error("ALREADY_JOINED");
+        }
+
+        const rawStatus =
+          String(tournament.status || "upcoming")
+            .trim()
+            .toLowerCase();
+
+        if (
+          [
+            "complete",
+            "completed",
+            "finished",
+            "closed",
+            "cancelled",
+            "canceled"
+          ].includes(rawStatus)
+        ) {
+          throw new Error("TOURNAMENT_CLOSED");
+        }
+
+        if (
+          ["live", "started", "running"]
+            .includes(rawStatus)
+        ) {
+          throw new Error("TOURNAMENT_LIVE");
+        }
+
+        const entryFee =
+          Number(
+            tournament.entryFee ??
+            tournament.entry ??
+            0
+          );
+
+        if (
+          !Number.isFinite(entryFee) ||
+          entryFee < 0
+        ) {
+          throw new Error("INVALID_ENTRY_FEE");
+        }
+
+        const slots =
+          Number(
+            tournament.slots ??
+            tournament.totalSlots ??
+            tournament.maxPlayers ??
+            0
+          );
+
+        const filled =
+          Number(
+            tournament.filledSlots ??
+            tournament.joined ??
+            tournament.joinedPlayers ??
+            0
+          );
+
+        if (slots > 0 && filled >= slots) {
+          throw new Error("TOURNAMENT_FULL");
+        }
+
+        const balance =
+          Number(user.walletBalance || 0);
+
+        if (entryFee > balance) {
+          throw new Error("INSUFFICIENT_BALANCE");
+        }
+
+        const now =
+          admin.firestore.FieldValue.serverTimestamp();
+
+        const newBalance =
+          balance - entryFee;
+
+        if (entryFee > 0) {
+          tx.update(userRef, {
+            walletBalance: newBalance,
+            updatedAt: now
+          });
+        }
+
+        tx.set(joinRequestRef, {
+          userId: decoded.uid,
+          tournamentId,
+          tournamentTitle:
+            String(
+              tournament.title ||
+              tournament.name ||
+              ""
+            ),
+          category:
+            String(
+              tournament.category ||
+              tournament.matchCategory ||
+              tournament.type ||
+              ""
+            ),
+          entryFee,
+          status:
+            entryFee > 0
+              ? "paid"
+              : "joined",
+          paymentVerified:
+            entryFee > 0,
+          paymentStatus:
+            entryFee > 0
+              ? "paid"
+              : "free",
+          createdAt: now,
+          updatedAt: now
+        });
+
+        tx.set(joinLockRef, {
+          userId: decoded.uid,
+          tournamentId,
+          joinRequestId: joinRequestRef.id,
+          status:
+            entryFee > 0
+              ? "paid"
+              : "joined",
+          entryFee,
+          createdAt: now,
+          updatedAt: now
+        });
+
+        if (entryFee > 0) {
+
+          const ledgerRef =
+            userRef
+              .collection("walletLedger")
+              .doc();
+
+          tx.set(ledgerRef, {
+            userId: decoded.uid,
+            tournamentId,
+            joinRequestId: joinRequestRef.id,
+            type: "tournament_entry",
+            kind: "entry",
+            amount: entryFee,
+            direction: "debit",
+            status: "completed",
+            title: "Tournament Entry",
+            name: "Tournament Entry",
+            detail:
+              String(
+                tournament.title ||
+                tournament.name ||
+                tournamentId
+              ),
+            createdAt: now
+          });
+        }
+
+        tx.update(tournamentRef, {
+          filledSlots:
+            Math.max(0, filled) + 1,
+
+          joinedPlayers:
+            Math.max(0, filled) + 1,
+
+          updatedAt: now
+        });
+
+        return {
+          joinRequestId:
+            joinRequestRef.id,
+
+          newBalance,
+
+          entryFee
+        };
+      });
 
       return res.json({
-  ok: true,
-  success: true,
-
-  joinRequestId:
-    result.joinRequestId,
-
-  newBalance:
-    result.newBalance
-});
+        ok: true,
+        success: true,
+        joinRequestId:
+          result.joinRequestId,
+        newBalance:
+          result.newBalance,
+        entryFee:
+          result.entryFee
+      });
 
     } catch (error) {
 
-      if (
-        error.message ===
-        "USER_NOT_FOUND"
-      ) {
-        return res.status(404).json({
-  ok: false,
-  success: false,
-  error: "User not found",
-  message: "User not found"
-});
-      }
+      const code =
+        error?.message || "";
 
-      if (
-        error.message ===
-        "TOURNAMENT_NOT_FOUND"
-      ) {
-        return res.status(404).json({
-  ok: false,
-  success: false,
-  error: "Tournament not found",
-  message: "Tournament not found"
-});
-      }
+      const map = {
+        USER_NOT_FOUND:
+          [404, "User not found"],
 
-      if (
-        error.message ===
-        "ALREADY_JOINED"
-      ) {
-        return res.status(409).json({
-  ok: false,
-  success: false,
-  error:
-    "You already joined this tournament",
-  message:
-    "You already joined this tournament"
-});
-      }
+        TOURNAMENT_NOT_FOUND:
+          [404, "Tournament not found"],
 
-      if (
-        error.message ===
-        "INSUFFICIENT_BALANCE"
-      ) {
-        return res.status(400).json({
-  ok: false,
-  success: false,
-  error:
-    "Insufficient wallet balance",
-  message:
-    "Insufficient wallet balance"
-});
-      }
+        ALREADY_JOINED:
+          [409, "You already joined this tournament"],
 
-      if (
-        error.message ===
-        "INVALID_ENTRY_FEE"
-      ) {
-        return res.status(400).json({
-  ok: false,
-  success: false,
-  error: "Invalid tournament entry fee",
-  message: "Invalid tournament entry fee"
-});
+        TOURNAMENT_FULL:
+          [409, "Tournament is full"],
+
+        TOURNAMENT_LIVE:
+          [409, "Live tournament cannot be joined"],
+
+        TOURNAMENT_CLOSED:
+          [409, "Tournament is closed"],
+
+        INVALID_ENTRY_FEE:
+          [400, "Invalid tournament entry fee"],
+
+        INSUFFICIENT_BALANCE:
+          [400, "Insufficient wallet balance"]
+      };
+
+      if (map[code]) {
+        return res
+          .status(map[code][0])
+          .json({
+            ok: false,
+            success: false,
+            message:
+              map[code][1]
+          });
       }
 
       console.error(
@@ -718,12 +571,14 @@ if (joinLockSnap.exists) {
         error
       );
 
-      return res.status(500).json({
-  ok: false,
-  success: false,
-  error: "Failed to join tournament",
-  message: "Failed to join tournament"
-});
+      return res
+        .status(500)
+        .json({
+          ok: false,
+          success: false,
+          message:
+            "Tournament join failed"
+        });
     }
   }
 );
@@ -8511,6 +8366,7 @@ app.post(
       }
 
       // OTP successfully verified
+      
 otpStore.delete(key);
 
 console.log(
@@ -8560,6 +8416,7 @@ if (purpose === "forgot-password") {
 // NORMAL OTP VERIFICATION RESPONSE
 // Signup / Login
 // ------------------------------------------------------
+      
 return res.json({
   ok: true,
   verified: true,
@@ -8640,7 +8497,6 @@ setInterval(
 // ============================================================
 // END EMAIL OTP SYSTEM
 // ============================================================
-
 
 // ============================================================
 // FORGOT PASSWORD - RESET PASSWORD
