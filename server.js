@@ -8454,6 +8454,113 @@ Your proof has been sent to the BATTLE X7 ARENA support team.
           message.caption ||
           "No caption";
 
+// ============================================================
+// BATTLE X7 ARENA — TELEGRAM VIDEO PROOF → FIRESTORE
+// ============================================================
+
+if (
+  firebaseReady &&
+  ticketId
+) {
+
+  try {
+
+    const supportTicketRef =
+      firestore
+        .collection("supportTickets")
+        .doc(String(ticketId));
+
+    const supportTicketSnap =
+      await supportTicketRef.get();
+
+    if (supportTicketSnap.exists) {
+
+      const proofMessageRef =
+        supportTicketRef
+          .collection("messages")
+          .doc();
+
+      await proofMessageRef.set({
+        senderId:
+          String(
+            message.from?.id || ""
+          ),
+
+        senderType:
+          "user",
+
+        message:
+          caption,
+
+        text:
+          caption,
+
+        messageType:
+          "video",
+
+        proofType:
+          "video",
+
+        telegramFileId:
+          String(
+            video || ""
+          ),
+
+        telegramChatId:
+          String(chatId),
+
+        read:
+          false,
+
+        createdAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        updatedAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp()
+      });
+
+      await supportTicketRef.set(
+        {
+          lastMessage:
+            caption,
+
+          lastMessageAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          proofReceived:
+            true,
+
+          proofType:
+            "video"
+        },
+        {
+          merge: true
+        }
+      );
+
+    }
+
+  } catch (firestoreVideoProofError) {
+
+    console.error(
+      "TELEGRAM VIDEO FIRESTORE SYNC ERROR:",
+      firestoreVideoProofError
+    );
+
+  }
+}
+
         const groupCaption =
 `🎥 SUPPORT VIDEO PROOF RECEIVED
 
