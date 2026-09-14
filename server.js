@@ -1453,14 +1453,11 @@ app.get(
         );
 
       if (result.rowCount) {
-
-        return res.json({
-          ok: true,
-          valid: true,
-          inviterUserId:
-            result.rows[0].user_id
-        });
-      }
+  return res.json({
+    ok: true,
+    valid: true
+  });
+}
 
       if (firebaseReady) {
 
@@ -1472,26 +1469,19 @@ app.get(
             .doc(code)
             .get();
 
-        if (
-          snap.exists &&
-          snap.data()?.active !== false
-        ) {
-
-          return res.json({
-            ok: true,
-            valid: true,
-            inviterUserId:
-              snap.data()?.userId ||
-              null
-          });
-        }
+        if (snap.exists &&
+    snap.data()?.active !== false) {
+  return res.json({
+    ok: true,
+    valid: true
+  });
+}
       }
 
       res.json({
-        ok: true,
-        valid: false,
-        inviterUserId: null
-      });
+  ok: true,
+  valid: false
+});
 
     } catch (error) {
 
@@ -1534,10 +1524,7 @@ app.post(
 
     if (!decoded) return;
 
-    const userId =
-      String(
-        req.body.userId || ""
-      ).trim();
+    const userId = decoded.uid;
 
     const referralCode =
       String(
@@ -1557,18 +1544,7 @@ app.post(
       )
         .trim()
         .toUpperCase();
-
-    if (
-      decoded.uid !== userId
-    ) {
-
-      return res.status(403).json({
-        ok: false,
-        error:
-          "User identity mismatch"
-      });
-    }
-
+    
     if (
       !userId ||
       !deviceId ||
