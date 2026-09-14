@@ -190,7 +190,6 @@ try {
   );
 }
 
-
 // ============================================================
 // FIREBASE AUTH
 // ============================================================
@@ -465,33 +464,60 @@ app.post(
           updatedAt: now
         });
 
-        if (entryFee > 0) {
+if (entryFee > 0) {
 
-          const ledgerRef =
-            userRef
-              .collection("walletLedger")
-              .doc();
+  // ----------------------------------------------------------
+  // UNIVERSAL WALLET LEDGER — TOURNAMENT ENTRY
+  // ----------------------------------------------------------
 
-          tx.set(ledgerRef, {
-            userId: decoded.uid,
-            tournamentId,
-            joinRequestId: joinRequestRef.id,
-            type: "tournament_entry",
-            kind: "entry",
-            amount: entryFee,
-            direction: "debit",
-            status: "completed",
-            title: "Tournament Entry",
-            name: "Tournament Entry",
-            detail:
-              String(
-                tournament.title ||
-                tournament.name ||
-                tournamentId
-              ),
-            createdAt: now
-          });
-        }
+  const ledgerTransactionId =
+    `tournament_entry_${decoded.uid}_${tournamentId}`;
+
+  addWalletLedgerEntry(
+    tx,
+    {
+      userId: decoded.uid,
+
+      transactionId:
+        ledgerTransactionId,
+
+      type:
+        "tournament_entry",
+
+      direction:
+        "debit",
+
+      amount:
+        entryFee,
+
+      previousBalance:
+        balance,
+
+      newBalance:
+        newBalance,
+
+      status:
+        "completed",
+
+      referenceId:
+        joinRequestRef.id,
+
+      description:
+        String(
+          tournament.title ||
+          tournament.name ||
+          tournamentId
+        ),
+
+      metadata: {
+        tournamentId,
+        joinRequestId:
+          joinRequestRef.id,
+        entryFee
+      }
+    }
+  );
+}
 
         tx.update(tournamentRef, {
           filledSlots:
@@ -770,7 +796,6 @@ function addWalletLedgerEntry(
 
 const BIRTHDAY_SETTINGS_PATH = "settings/birthday";
 const BIRTHDAY_TIMEZONE = "Asia/Kolkata";
-
 
 // ------------------------------------------------------------
 // CALCULATE AGE
@@ -1974,7 +1999,7 @@ app.post(
 
 // ============================================================
 // REFERRAL REWARD
-// STEP 1E — UNIVERSAL WALLET LEDGER
+// UNIVERSAL WALLET LEDGER
 // ============================================================
 
 async function creditReferralReward(
@@ -2658,7 +2683,6 @@ app.post(
           ? req.user.uid
           : "";
 
-
       // --------------------------------------------------------
       // Credit wallet + create ledger
       // --------------------------------------------------------
@@ -3224,7 +3248,6 @@ app.post(
 
 // ============================================================
 // ADMIN WITHDRAWAL APPROVE / REJECT
-// STEP 1C
 // ============================================================
 
 // ------------------------------------------------------------
@@ -5311,6 +5334,370 @@ app.patch(
         ok: false,
         error:
           "All notifications read mark nahi ho sakin"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN ANNOUNCEMENT API
+// ============================================================
+
+app.post(
+  "/admin/announcement",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(req, res);
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const title =
+      String(req.body?.title || "")
+        .trim()
+        .slice(0, 120);
+
+    const message =
+      String(req.body?.message || "")
+        .trim()
+        .slice(0, 2000);
+
+    const icon =
+      String(req.body?.icon || "📢")
+        .trim()
+        .slice(0, 8);
+
+    const active =
+      req.body?.active !== false;
+
+    const published =
+      req.body?.published !== false;
+
+    if (!title || !message) {
+      return res.status(400).json({
+        ok: false,
+        error: "title and message are required"
+      });
+    }
+
+    try {
+
+      const announcementRef =
+        firestore
+          .collection("announcements")
+          .doc();
+
+      const now =
+        admin.firestore.FieldValue.serverTimestamp();
+
+      const data = {
+        title,
+        message,
+        icon,
+
+        active,
+        published,
+
+        createdAt: now,
+        updatedAt: now,
+
+        createdBy: adminUser.uid,
+        updatedBy: adminUser.uid
+      };
+
+      // Optional schedule fields
+      if (req.body?.startAt) {
+        data.startAt = req.body.startAt;
+      }
+
+      if (req.body?.publishAt) {
+        data.publishAt = req.body.publishAt;
+      }
+
+      if (req.body?.endAt) {
+        data.endAt = req.body.endAt;
+      }
+
+      if (req.body?.expiresAt) {
+        data.expiresAt = req.body.expiresAt;
+      }
+
+      await announcementRef.set(data);
+
+      return res.json({
+        ok: true,
+        announcementId: announcementRef.id
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN ANNOUNCEMENT CREATE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to create announcement"
+      });
+    }
+  }
+);
+
+// ============================================================
+// ADMIN — UPDATE ANNOUNCEMENT
+// ============================================================
+
+app.patch(
+  "/admin/announcement/:announcementId",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(req, res);
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const announcementId =
+      String(
+        req.params.announcementId || ""
+      ).trim();
+
+    if (
+      !announcementId ||
+      !/^[A-Za-z0-9_-]{1,160}$/.test(
+        announcementId
+      )
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid announcement ID"
+      });
+    }
+
+    try {
+
+      const ref =
+        firestore
+          .collection("announcements")
+          .doc(announcementId);
+
+      const snap =
+        await ref.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "Announcement not found"
+        });
+      }
+
+      const update = {};
+
+      if (
+        req.body?.title !== undefined
+      ) {
+        update.title =
+          String(req.body.title)
+            .trim()
+            .slice(0, 120);
+      }
+
+      if (
+        req.body?.message !== undefined
+      ) {
+        update.message =
+          String(req.body.message)
+            .trim()
+            .slice(0, 2000);
+      }
+
+      if (
+        req.body?.icon !== undefined
+      ) {
+        update.icon =
+          String(req.body.icon)
+            .trim()
+            .slice(0, 8);
+      }
+
+      if (
+        req.body?.active !== undefined
+      ) {
+        update.active =
+          req.body.active === true;
+      }
+
+      if (
+        req.body?.published !== undefined
+      ) {
+        update.published =
+          req.body.published === true;
+      }
+
+      if (
+        req.body?.startAt !== undefined
+      ) {
+        update.startAt =
+          req.body.startAt;
+      }
+
+      if (
+        req.body?.publishAt !== undefined
+      ) {
+        update.publishAt =
+          req.body.publishAt;
+      }
+
+      if (
+        req.body?.endAt !== undefined
+      ) {
+        update.endAt =
+          req.body.endAt;
+      }
+
+      if (
+        req.body?.expiresAt !== undefined
+      ) {
+        update.expiresAt =
+          req.body.expiresAt;
+      }
+
+      update.updatedAt =
+        admin.firestore.FieldValue.serverTimestamp();
+
+      update.updatedBy =
+        adminUser.uid;
+
+      if (
+        update.title !== undefined &&
+        !update.title
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "Title cannot be empty"
+        });
+      }
+
+      if (
+        update.message !== undefined &&
+        !update.message
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "Message cannot be empty"
+        });
+      }
+
+      await ref.set(
+        update,
+        { merge: true }
+      );
+
+      return res.json({
+        ok: true,
+        announcementId
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN ANNOUNCEMENT UPDATE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to update announcement"
+      });
+    }
+  }
+);
+
+// ============================================================
+// ADMIN — DELETE ANNOUNCEMENT
+// ============================================================
+
+app.delete(
+  "/admin/announcement/:announcementId",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(req, res);
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    const announcementId =
+      String(
+        req.params.announcementId || ""
+      ).trim();
+
+    if (
+      !announcementId ||
+      !/^[A-Za-z0-9_-]{1,160}$/.test(
+        announcementId
+      )
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid announcement ID"
+      });
+    }
+
+    try {
+
+      const ref =
+        firestore
+          .collection("announcements")
+          .doc(announcementId);
+
+      const snap =
+        await ref.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "Announcement not found"
+        });
+      }
+
+      await ref.delete();
+
+      return res.json({
+        ok: true,
+        announcementId
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN ANNOUNCEMENT DELETE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to delete announcement"
       });
     }
   }
@@ -7937,6 +8324,14 @@ app.post(
   "/send-ticket",
   async (req, res) => {
 
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
+    if (!decoded) return;
+
     try {
 
       if (!BOT_TOKEN) {
@@ -7949,17 +8344,18 @@ app.post(
       }
 
       const {
-        ticketId,
-        category,
-        tournamentId,
-        problemSummary,
-        description,
-        uid,
-        freeFireName,
-        username,
-        mobile,
-        email
-      } = req.body || {};
+  ticketId,
+  category,
+  tournamentId,
+  problemSummary,
+  description,
+  freeFireName,
+  username,
+  mobile,
+  email
+} = req.body || {};
+
+const uid = decoded.uid;
 
       if (!ticketId) {
 
@@ -9497,6 +9893,7 @@ If you have not connected your ticket yet, please open "Open Ticket in Telegram"
 
 app.get(
   "/set-webhook",
+  requireAdmin,
   async (req, res) => {
 
     try {
@@ -9548,13 +9945,13 @@ app.get(
   }
 );
 
-
 // ============================================================
 // WEBHOOK INFO
 // ============================================================
 
 app.get(
   "/webhook-info",
+  requireAdmin,
   async (req, res) => {
 
     try {
@@ -12092,7 +12489,6 @@ OR
     });
   }
 
-
   // ========================================================
   // FINAL CONFIRMATION
   // ========================================================
@@ -12914,7 +13310,8 @@ const reply = String(
 // ============================================================
 // TEMPORARY SARVAM API TEST
 // ============================================================
-app.get("/api/test-sarvam", async (req, res) => {
+
+app.get("/api/test-sarvam", requireAdmin, async (req, res) => {
   try {
     const response = await fetch("https://api.sarvam.ai/v1/chat/completions", {
       method: "POST",
@@ -12954,7 +13351,8 @@ app.get("/api/test-sarvam", async (req, res) => {
 // ============================================================
 // TEMPORARY ELEVENLABS API TEST
 // ============================================================
-app.get("/api/test-elevenlabs", async (req, res) => {
+
+app.get("/api/test-elevenlabs", requireAdmin, async (req, res) => {
   try {
     const response = await fetch(
       "https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL",
@@ -13004,7 +13402,8 @@ app.get("/api/test-elevenlabs", async (req, res) => {
 // ============================================================
 // TEMPORARY GEMINI CHAT API TEST
 // ============================================================
-app.get("/api/test-gemini", async (req, res) => {
+
+app.get("/api/test-gemini", requireAdmin, async (req, res) => {
   try {
     if (!gemini) {
       return res.status(503).json({
@@ -13041,7 +13440,8 @@ app.get("/api/test-gemini", async (req, res) => {
 // ============================================================
 // TEMPORARY OPENAI CHAT API TEST
 // ============================================================
-app.get("/api/test-openai", async (req, res) => {
+
+app.get("/api/test-openai", requireAdmin, async (req, res) => {
   try {
     const response = await openai.responses.create({
       model: process.env.AI_ARENA_MODEL || "gpt-5.6-mini",
@@ -13069,7 +13469,8 @@ app.get("/api/test-openai", async (req, res) => {
 // ============================================================
 // TEMPORARY GEMINI AVAILABLE MODELS TEST
 // ============================================================
-app.get("/api/test-gemini-models", async (req, res) => {
+
+app.get("/api/test-gemini-models", requireAdmin, async (req, res) => {
   try {
     const response = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models",
@@ -13127,7 +13528,8 @@ app.get("/api/test-gemini-models", async (req, res) => {
 // ============================================================
 // TEMPORARY ALL AI PROVIDERS + TTS COMBINED TEST
 // ============================================================
-app.get("/api/test-all-ai", async (req, res) => {
+
+app.get("/api/test-all-ai", requireAdmin, async (req, res) => {
 
   const result = {
     sarvam_chat: null,
@@ -13143,6 +13545,7 @@ app.get("/api/test-all-ai", async (req, res) => {
   // ==========================================================
   // 1. SARVAM CHAT
   // ==========================================================
+  
   try {
     const response = await fetch(
       "https://api.sarvam.ai/v1/chat/completions",
@@ -13187,10 +13590,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 2. ELEVENLABS TTS
   // ==========================================================
+  
   try {
     const response = await fetch(
       "https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL",
@@ -13227,10 +13630,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 3. GEMINI CHAT
   // ==========================================================
+  
   try {
     if (!gemini) {
       throw new Error("Gemini client not initialized");
@@ -13255,10 +13658,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 4. OPENAI CHAT
   // ==========================================================
+  
   try {
     const response = await openai.responses.create({
       model: "gpt-5.6-luna",
@@ -13279,10 +13682,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 5. GEMINI TTS
   // ==========================================================
+  
   try {
     if (!gemini) {
       throw new Error("Gemini client not initialized");
@@ -13324,10 +13727,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 6. OPENAI TTS
   // ==========================================================
+  
   try {
     const response = await openai.audio.speech.create({
       model: "gpt-4o-mini-tts",
@@ -13354,10 +13757,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 7. SARVAM TTS
   // ==========================================================
+  
   try {
     const response = await fetch(
       "https://api.sarvam.ai/text-to-speech",
@@ -13403,10 +13806,10 @@ app.get("/api/test-all-ai", async (req, res) => {
     };
   }
 
-
   // ==========================================================
   // 8. ELEVENLABS FINAL TTS
   // ==========================================================
+  
   try {
     const response = await fetch(
       "https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL",
