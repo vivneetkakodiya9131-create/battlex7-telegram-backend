@@ -6749,30 +6749,6 @@ app.post(
 
 const ADMIN_UID = process.env.ADMIN_UID || "";
 
-async function requireAdmin(req, res) {
-  const decoded = await requireFirebaseUser(req, res);
-
-  if (!decoded) return null;
-
-  if (!ADMIN_UID) {
-    res.status(503).json({
-      ok: false,
-      error: "ADMIN_UID is not configured"
-    });
-    return null;
-  }
-
-  if (decoded.uid !== ADMIN_UID) {
-    res.status(403).json({
-      ok: false,
-      error: "Admin access required"
-    });
-    return null;
-  }
-
-  return decoded;
-}
-
 // ------------------------------------------------------------
 // CREATE SMART SUNDAY MEMORY TABLE
 // ------------------------------------------------------------
@@ -7080,55 +7056,6 @@ app.get("/theme", async (req, res) => {
   }
 
 });
-
-// ------------------------------------------------------------
-// ADMIN AUTHENTICATION
-// ------------------------------------------------------------
-
-async function requireAdmin(req, res) {
-
-  const decoded =
-    await requireFirebaseUser(
-      req,
-      res
-    );
-
-  if (!decoded) {
-    return null;
-  }
-
-  const adminUid =
-    String(
-      process.env.ADMIN_UID || ""
-    ).trim();
-
-  if (!adminUid) {
-
-    res.status(503).json({
-      ok: false,
-      error:
-        "ADMIN_UID is not configured"
-    });
-
-    return null;
-
-  }
-
-  if (decoded.uid !== adminUid) {
-
-    res.status(403).json({
-      ok: false,
-      error:
-        "Admin access denied"
-    });
-
-    return null;
-
-  }
-
-  return decoded;
-
-}
 
 // ------------------------------------------------------------
 // UPDATE REMOTE THEME
