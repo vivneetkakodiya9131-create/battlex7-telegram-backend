@@ -18834,6 +18834,297 @@ async function x7CreateAdminAuditLog({
 }
 
 // ============================================================
+// BATTLE X7 ARENA — ADMIN CONTENT CONTROL
+// Help + Rules
+// MASTER ADMIN ONLY
+// ============================================================
+
+// ------------------------------------------------------------
+// GET ADMIN CONTENT
+// ------------------------------------------------------------
+
+app.get(
+  "/admin/content",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+    }
+
+    try {
+
+      const ref =
+        firestore
+          .collection("remoteControl")
+          .doc("content");
+
+      const snap =
+        await ref.get();
+
+      const data =
+        snap.exists
+          ? snap.data() || {}
+          : {};
+
+      return res.json({
+
+        ok: true,
+
+        content: {
+
+          helpHi:
+            String(
+              data.helpHi || ""
+            ),
+
+          helpEn:
+            String(
+              data.helpEn || ""
+            ),
+
+          rulesHi:
+            String(
+              data.rulesHi || ""
+            ),
+
+          rulesEn:
+            String(
+              data.rulesEn || ""
+            )
+
+        },
+
+        source:
+          snap.exists
+            ? "remote"
+            : "default"
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN CONTENT GET ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Failed to load admin content"
+
+      });
+
+    }
+
+  }
+);
+
+// ------------------------------------------------------------
+// SAVE ADMIN CONTENT
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/content",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+    }
+
+    try {
+
+      const body =
+        req.body || {};
+
+      const helpHi =
+        String(
+          body.helpHi || ""
+        )
+        .trim();
+
+      const helpEn =
+        String(
+          body.helpEn || ""
+        )
+        .trim();
+
+      const rulesHi =
+        String(
+          body.rulesHi || ""
+        )
+        .trim();
+
+      const rulesEn =
+        String(
+          body.rulesEn || ""
+        )
+        .trim();
+
+      // ------------------------------------------------------
+      // LENGTH VALIDATION
+      // ------------------------------------------------------
+
+      if (
+        helpHi.length > 20000 ||
+        helpEn.length > 20000 ||
+        rulesHi.length > 30000 ||
+        rulesEn.length > 30000
+      ) {
+
+        return res.status(400).json({
+
+          ok: false,
+
+          error:
+            "Content is too long"
+
+        });
+
+      }
+
+      // ------------------------------------------------------
+      // SAVE
+      // ------------------------------------------------------
+
+      const contentRef =
+        firestore
+          .collection("remoteControl")
+          .doc("content");
+
+
+      const contentData = {
+
+        helpHi,
+
+        helpEn,
+
+        rulesHi,
+
+        rulesEn,
+
+        updatedAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        updatedBy:
+          adminUser.uid
+
+      };
+
+
+      await contentRef.set(
+        contentData,
+        {
+          merge: true
+        }
+      );
+
+      // ------------------------------------------------------
+      // AUDIT LOG
+      // ------------------------------------------------------
+
+      await x7CreateAdminAuditLog({
+
+        adminUid:
+          adminUser.uid,
+
+        action:
+          "CONTENT_UPDATED",
+
+        section:
+          "content",
+
+        targetId:
+          "content",
+
+        details: {
+
+          fieldsUpdated: [
+            "helpHi",
+            "helpEn",
+            "rulesHi",
+            "rulesEn"
+          ]
+
+        }
+
+      });
+
+
+      return res.json({
+
+        ok: true,
+
+        message:
+          "Content saved successfully",
+
+        content: {
+
+          helpHi,
+
+          helpEn,
+
+          rulesHi,
+
+          rulesEn
+
+        },
+
+        updatedBy:
+          adminUser.uid
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN CONTENT SAVE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Failed to save admin content"
+
+      });
+
+    }
+
+  }
+);
+
+// ============================================================
 // END FULL ADMIN CONTROL API PATCH
 // ============================================================
     
