@@ -13766,6 +13766,942 @@ app.get("/api/test-all-ai", requireAdmin, async (req, res) => {
     result
   });
 });
+
+// ============================================================
+// BATTLE X7 ARENA — FULL ADMIN CONTROL API PATCH
+// ADD THIS BLOCK ABOVE: // START SERVER
+// DO NOT DELETE EXISTING ROUTES
+// ============================================================
+
+// ------------------------------------------------------------
+// ADMIN — FINANCE SUMMARY
+// ------------------------------------------------------------
+
+app.get("/admin/finance/summary", requireAdmin, async (req, res) => {
+  try {
+
+    if (!pool) {
+      return res.status(503).json({
+        ok: false,
+        error: "Database not configured"
+      });
+    }
+
+    const deposits = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'approved'), 0) AS approved_amount,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0) AS pending_amount
+      FROM deposit_requests
+    `);
+
+    const withdrawals = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'approved'), 0) AS approved_amount,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0) AS pending_amount
+      FROM withdrawal_requests
+    `);
+
+    return res.json({
+      ok: true,
+      deposits: deposits.rows[0] || {},
+      withdrawals: withdrawals.rows[0] || {}
+    });
+
+  } catch (error) {
+
+    console.error(
+      "ADMIN FINANCE SUMMARY ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "Finance summary load nahi ho saka"
+    });
+  }
+});
+
+// ------------------------------------------------------------
+// ADMIN — USER UPDATE
+// Safe fields only
+// ------------------------------------------------------------
+
+app.patch("/admin/user/:userId", requireAdmin, async (req, res) => {
+
+  try {
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase is not configured"
+      });
+    }
+
+    const userId = String(
+      req.params.userId || ""
+    ).trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        ok: false,
+        error: "User ID is required"
+      });
+    }
+
+    const body = req.body || {};
+
+    const allowed = [
+      "username",
+      "name",
+      "freeFireName",
+      "freeFireUid",
+      "phone",
+      "dob",
+      "photoURL",
+      "status",
+      "isBlocked"
+    ];
+
+    const updates = {};
+
+    for (const key of allowed) {
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          body,
+          key
+        )
+      ) {
+        updates[key] = body[key];
+      }
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({
+        ok: false,
+        error: "No editable user fields supplied"
+      });
+    }
+
+    updates.updatedAt =
+      admin.firestore.FieldValue.serverTimestamp();
+
+    await firestore
+      .collection("users")
+      .doc(userId)
+      .set(
+        updates,
+        {
+          merge: true
+        }
+      );
+
+    return res.json({
+      ok: true,
+      userId,
+      message: "User updated successfully"
+    });
+
+  } catch (error) {
+
+    console.error(
+      "ADMIN USER UPDATE ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: "User update nahi ho saka"
+    });
+  }
+});
+
+// ------------------------------------------------------------
+// ADMIN — TOURNAMENT PLAYERS
+// ------------------------------------------------------------
+
+app.get(
+  "/admin/tournament/:tournamentId/players",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const tournamentId = String(
+        req.params.tournamentId || ""
+      ).trim();
+
+      if (!tournamentId) {
+        return res.status(400).json({
+          ok: false,
+          error: "Tournament ID is required"
+        });
+      }
+
+      const snap = await firestore
+        .collection("joinRequests")
+        .where(
+          "tournamentId",
+          "==",
+          tournamentId
+        )
+        .limit(1000)
+        .get();
+
+      const players = [];
+
+      for (const doc of snap.docs) {
+
+        const data = doc.data() || {};
+
+        const userId = String(
+          data.userId || ""
+        ).trim();
+
+        let user = {};
+
+        if (userId) {
+
+          try {
+
+            const userSnap =
+              await firestore
+                .collection("users")
+                .doc(userId)
+                .get();
+
+            if (userSnap.exists) {
+              user = userSnap.data() || {};
+            }
+
+          } catch (_) {}
+        }
+
+        players.push({
+          id: doc.id,
+          userId,
+
+          username:
+            user.username ||
+            user.name ||
+            data.username ||
+            data.playerName ||
+            "Player",
+
+          freeFireName:
+            user.freeFireName ||
+            data.freeFireName ||
+            "",
+
+          freeFireUid:
+            user.freeFireUid ||
+            data.freeFireUid ||
+            "",
+
+          status:
+            data.status ||
+            "joined",
+
+          entryFee:
+            Number(
+              data.entryFee ??
+              data.entry ??
+              0
+            ),
+
+          rank:
+            Number(
+              data.rank || 0
+            ),
+
+          kills:
+            Number(
+              data.kills || 0
+            ),
+
+          prizeWon:
+            Number(
+              data.prizeWon ??
+              data.winningsAmount ??
+              data.winningAmount ??
+              0
+            ),
+
+          createdAt:
+            data.createdAt || null,
+
+          joinedAt:
+            data.joinedAt ||
+            data.createdAt ||
+            null
+        });
+      }
+
+      return res.json({
+        ok: true,
+        tournamentId,
+        count: players.length,
+        players
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN TOURNAMENT PLAYERS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Tournament players load nahi ho sake"
+      });
+    }
+  }
+);
+
+// ============================================================
+// ADMIN — BANNER MANAGEMENT
+// Compatible with existing User Panel banner fields
+// ============================================================
+
+function x7AdminSafeUrl(value) {
+
+  const url = String(
+    value || ""
+  ).trim();
+
+  if (!url) return "";
+
+  try {
+
+    const parsed =
+      new URL(url);
+
+    if (
+      parsed.protocol !== "https:" &&
+      parsed.protocol !== "http:"
+    ) {
+      return "";
+    }
+
+    return parsed.toString();
+
+  } catch (_) {
+
+    return "";
+  }
+}
+
+// ------------------------------------------------------------
+// GET BANNERS
+// ------------------------------------------------------------
+
+app.get(
+  "/admin/banners",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const snap = await firestore
+        .collection("banners")
+        .get();
+
+      const banners = [];
+
+      snap.forEach(doc => {
+
+        banners.push({
+          id: doc.id,
+          ...(doc.data() || {})
+        });
+
+      });
+
+      banners.sort(
+        (a, b) =>
+          Number(a.order || 0) -
+          Number(b.order || 0)
+      );
+
+      return res.json({
+        ok: true,
+        banners
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN BANNERS GET ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Banners load nahi ho sake"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// CREATE BANNER
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/banners",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const body = req.body || {};
+
+      const imageUrl = x7AdminSafeUrl(
+        body.imageUrl ||
+        body.image ||
+        body.bannerUrl ||
+        body.banner
+      );
+
+      if (!imageUrl) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Valid HTTP/HTTPS banner image URL is required"
+        });
+      }
+
+      const bannerData = {
+
+        imageUrl,
+
+        title: String(
+          body.title ||
+          body.heading ||
+          ""
+        ).trim(),
+
+        subtitle: String(
+          body.subtitle ||
+          body.description ||
+          body.sub ||
+          ""
+        ).trim(),
+
+        kicker: String(
+          body.kicker ||
+          body.tag ||
+          ""
+        ).trim(),
+
+        buttonText: String(
+          body.buttonText ||
+          body.button ||
+          body.cta ||
+          ""
+        ).trim(),
+
+        emoji: String(
+          body.emoji ||
+          ""
+        ).trim(),
+
+        order: Number.isFinite(
+          Number(body.order)
+        )
+          ? Number(body.order)
+          : 0,
+
+        startAt:
+          body.startAt ||
+          body.startDate ||
+          body.validFrom ||
+          null,
+
+        endAt:
+          body.endAt ||
+          body.endDate ||
+          body.validUntil ||
+          null,
+
+        enabled:
+          body.enabled !== false,
+
+        clickUrl:
+          x7AdminSafeUrl(
+            body.clickUrl ||
+            body.url ||
+            ""
+          ),
+
+        openInNewTab:
+          body.openInNewTab !== false,
+
+        createdAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        updatedAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        createdBy:
+          req.user.uid
+      };
+
+      const ref = firestore
+        .collection("banners")
+        .doc();
+
+      await ref.set(
+        bannerData
+      );
+
+      return res.json({
+        ok: true,
+        bannerId: ref.id,
+        message:
+          "Banner created successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN BANNER CREATE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Banner create nahi ho saka"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// UPDATE BANNER
+// ------------------------------------------------------------
+
+app.patch(
+  "/admin/banners/:bannerId",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const bannerId = String(
+        req.params.bannerId || ""
+      ).trim();
+
+      if (!bannerId) {
+        return res.status(400).json({
+          ok: false,
+          error: "Banner ID is required"
+        });
+      }
+
+      const body = req.body || {};
+      const updates = {};
+
+      if (
+        body.imageUrl !== undefined ||
+        body.image !== undefined ||
+        body.bannerUrl !== undefined ||
+        body.banner !== undefined
+      ) {
+
+        const imageUrl =
+          x7AdminSafeUrl(
+            body.imageUrl ||
+            body.image ||
+            body.bannerUrl ||
+            body.banner
+          );
+
+        if (!imageUrl) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Valid HTTP/HTTPS banner image URL is required"
+          });
+        }
+
+        updates.imageUrl =
+          imageUrl;
+      }
+
+      const textFields = {
+        title:
+          body.title ??
+          body.heading,
+
+        subtitle:
+          body.subtitle ??
+          body.description ??
+          body.sub,
+
+        kicker:
+          body.kicker ??
+          body.tag,
+
+        buttonText:
+          body.buttonText ??
+          body.button ??
+          body.cta,
+
+        emoji:
+          body.emoji
+      };
+
+      for (
+        const [key, value]
+        of Object.entries(textFields)
+      ) {
+
+        if (value !== undefined) {
+
+          updates[key] =
+            String(
+              value ?? ""
+            ).trim();
+        }
+      }
+
+      if (
+        body.order !== undefined
+      ) {
+        updates.order =
+          Number(body.order) || 0;
+      }
+
+      if (
+        body.startAt !== undefined ||
+        body.startDate !== undefined ||
+        body.validFrom !== undefined
+      ) {
+
+        updates.startAt =
+          body.startAt ??
+          body.startDate ??
+          body.validFrom ??
+          null;
+      }
+
+      if (
+        body.endAt !== undefined ||
+        body.endDate !== undefined ||
+        body.validUntil !== undefined
+      ) {
+
+        updates.endAt =
+          body.endAt ??
+          body.endDate ??
+          body.validUntil ??
+          null;
+      }
+
+      if (
+        body.enabled !== undefined
+      ) {
+        updates.enabled =
+          body.enabled !== false;
+      }
+
+      if (
+        body.clickUrl !== undefined ||
+        body.url !== undefined
+      ) {
+
+        const clickUrl =
+          x7AdminSafeUrl(
+            body.clickUrl ||
+            body.url ||
+            ""
+          );
+
+        updates.clickUrl =
+          clickUrl;
+      }
+
+      if (
+        body.openInNewTab !== undefined
+      ) {
+
+        updates.openInNewTab =
+          body.openInNewTab !== false;
+      }
+
+      updates.updatedAt =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      updates.updatedBy =
+        req.user.uid;
+
+      await firestore
+        .collection("banners")
+        .doc(bannerId)
+        .set(
+          updates,
+          {
+            merge: true
+          }
+        );
+
+      return res.json({
+        ok: true,
+        bannerId,
+        message:
+          "Banner updated successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN BANNER UPDATE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Banner update nahi ho saka"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// DELETE BANNER
+// ------------------------------------------------------------
+
+app.delete(
+  "/admin/banners/:bannerId",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const bannerId = String(
+        req.params.bannerId || ""
+      ).trim();
+
+      if (!bannerId) {
+        return res.status(400).json({
+          ok: false,
+          error: "Banner ID is required"
+        });
+      }
+
+      await firestore
+        .collection("banners")
+        .doc(bannerId)
+        .delete();
+
+      return res.json({
+        ok: true,
+        bannerId,
+        message:
+          "Banner deleted successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN BANNER DELETE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Banner delete nahi ho saka"
+      });
+    }
+  }
+);
+
+// ============================================================
+// ADMIN — AUDIT LOG
+// ============================================================
+
+app.get(
+  "/admin/audit-logs",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const limitRaw =
+        Number(req.query.limit || 100);
+
+      const limit =
+        Math.max(
+          1,
+          Math.min(
+            300,
+            Number.isFinite(limitRaw)
+              ? Math.floor(limitRaw)
+              : 100
+          )
+        );
+
+      const snap = await firestore
+        .collection("adminAuditLogs")
+        .orderBy(
+          "createdAt",
+          "desc"
+        )
+        .limit(limit)
+        .get();
+
+      const logs = [];
+
+      snap.forEach(doc => {
+
+        logs.push({
+          id: doc.id,
+          ...(doc.data() || {})
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+        logs
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN AUDIT LOG ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Audit logs load nahi ho sake"
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// CREATE AUDIT LOG HELPER
+// ------------------------------------------------------------
+
+async function x7CreateAdminAuditLog({
+  adminUid,
+  action,
+  section,
+  targetId = "",
+  details = {}
+}) {
+
+  if (!firebaseReady) {
+    return;
+  }
+
+  try {
+
+    await firestore
+      .collection("adminAuditLogs")
+      .add({
+
+        adminUid:
+          String(
+            adminUid || ""
+          ),
+
+        action:
+          String(
+            action || ""
+          ),
+
+        section:
+          String(
+            section || ""
+          ),
+
+        targetId:
+          String(
+            targetId || ""
+          ),
+
+        details:
+          details || {},
+
+        createdAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp()
+      });
+
+  } catch (error) {
+
+    console.error(
+      "ADMIN AUDIT WRITE ERROR:",
+      error
+    );
+  }
+}
+
+// ============================================================
+// END FULL ADMIN CONTROL API PATCH
+// ============================================================
     
 // ============================================================
 // START SERVER
