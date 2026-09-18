@@ -8949,6 +8949,7 @@ app.post(
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN DASHBOARD OVERVIEW
+// ADVANCED LIVE CONTROL CENTER
 // Real Firestore data only
 // ============================================================
 
@@ -8973,16 +8974,17 @@ app.get(
 
     try {
 
-      // --------------------------------------------------------
+      // ========================================================
       // LOAD MAIN COLLECTIONS
-      // --------------------------------------------------------
+      // ========================================================
 
       const [
         usersSnap,
         tournamentsSnap,
         joinsSnap,
         depositsSnap,
-        withdrawalsSnap
+        withdrawalsSnap,
+        supportSnap
       ] = await Promise.all([
 
         firestore
@@ -9003,29 +9005,42 @@ app.get(
 
         firestore
           .collection("withdrawRequests")
+          .get(),
+
+        firestore
+          .collection("supportTickets")
           .get()
 
       ]);
 
-      // --------------------------------------------------------
+      // ========================================================
       // USERS
-      // --------------------------------------------------------
+      // ========================================================
 
       const totalUsers =
         usersSnap.size;
 
       let activeUsers = 0;
+      let blockedUsers = 0;
 
       usersSnap.forEach((doc) => {
 
         const data =
           doc.data() || {};
 
-        /*
-         * Sirf actual activity fields ko consider karenge.
-         * Agar user document mein activity field available
-         * nahi hai to activeUsers artificially count nahi hoga.
-         */
+        const status =
+          String(
+            data.status || ""
+          )
+            .trim()
+            .toLowerCase();
+
+        if (
+          status === "blocked" ||
+          data.isBlocked === true
+        ) {
+          blockedUsers++;
+        }
 
         const lastActive =
           data.lastActiveAt ||
@@ -9038,18 +9053,20 @@ app.get(
 
       });
 
-      // --------------------------------------------------------
-      // TOURNAMENT COUNTS
-      // --------------------------------------------------------
+      // ========================================================
+      // TOURNAMENTS
+      // ========================================================
 
       let totalTournaments = 0;
       let upcomingTournaments = 0;
       let liveTournaments = 0;
       let completedTournaments = 0;
       let resultPendingTournaments = 0;
+      let cancelledTournaments = 0;
 
       let totalJoinedPlayers = 0;
       let liveJoinedPlayers = 0;
+
 
       const now =
         Date.now();
@@ -9071,38 +9088,12 @@ app.get(
             .toUpperCase();
 
 
-        const startValue =
-          data.startTime ||
-          data.startAt ||
-          data.matchDateTime ||
-          null;
-
-
-        let startMs = 0;
-
-        if (
-          startValue &&
-          typeof startValue.toMillis === "function"
-        ) {
-          startMs =
-            startValue.toMillis();
-        }
-        else if (startValue) {
-          startMs =
-            new Date(
-              startValue
-            ).getTime();
-        }
-
-        // ------------------------------------------------------
-        // STATUS COUNTS
-        // ------------------------------------------------------
-
         if (
           status === "LIVE"
         ) {
           liveTournaments++;
         }
+
 
         if (
           status === "COMPLETED"
@@ -9110,29 +9101,97 @@ app.get(
           completedTournaments++;
         }
 
+
         if (
           status === "RESULT_PENDING"
         ) {
           resultPendingTournaments++;
         }
 
-        // ------------------------------------------------------
-        // UPCOMING
-        // ------------------------------------------------------
 
         if (
-          status === "DRAFT" ||
-          status === "REGISTRATION_OPEN" ||
-          status === "REGISTRATION_CLOSED" ||
-          status === "ROOM_PUBLISHED"
+          status === "CANCELLED"
+        ) {
+          cancelledTournaments++;
+        }
+
+        // ------------------------------------------------------
+        // DATE + TIME
+        // ------------------------------------------------------
+
+        let startMs = 0;
+
+
+        const startValue =
+          data.startTime ||
+          data.startAt ||
+          data.matchDateTime ||
+          null;
+
+
+        if (
+          startValue &&
+          typeof startValue.toMillis ===
+            "function"
         ) {
 
+          startMs =
+            startValue.toMillis();
+
+        } else if (
+          startValue
+        ) {
+
+          const parsed =
+            new Date(
+              startValue
+            ).getTime();
+
           if (
+            Number.isFinite(parsed)
+          ) {
+            startMs = parsed;
+          }
+
+        }
+
+        // Existing admin tournament
+        // date/time fields fallback.
+
+        if (
+          !startMs &&
+          data.date &&
+          data.time
+        ) {
+
+          const parsed =
+            new Date(
+              `${data.date}T${data.time}`
+            ).getTime();
+
+          if (
+            Number.isFinite(parsed)
+          ) {
+            startMs = parsed;
+          }
+
+        }
+
+
+        if (
+          (
+            status === "DRAFT" ||
+            status === "REGISTRATION_OPEN" ||
+            status === "REGISTRATION_CLOSED" ||
+            status === "ROOM_PUBLISHED"
+          ) &&
+          (
             startMs > now ||
             !startMs
-          ) {
-            upcomingTournaments++;
-          }
+          )
+        ) {
+
+          upcomingTournaments++;
 
         }
 
@@ -9140,49 +9199,45 @@ app.get(
         // JOINED PLAYERS
         // ------------------------------------------------------
 
-        const joinedPlayers =
+        const joined =
           Number(
-            data.joinedPlayers || 0
+            data.joinedPlayers ??
+            data.filledSlots ??
+            data.joined ??
+            0
           );
-
-        totalJoinedPlayers +=
-          Number.isFinite(
-            joinedPlayers
-          )
-            ? joinedPlayers
-            : 0;
 
 
         if (
-          status === "LIVE"
+          Number.isFinite(joined)
         ) {
 
-          liveJoinedPlayers +=
-            Number.isFinite(
-              joinedPlayers
-            )
-              ? joinedPlayers
-              : 0;
+          totalJoinedPlayers +=
+            joined;
+
+          if (
+            status === "LIVE"
+          ) {
+
+            liveJoinedPlayers +=
+              joined;
+
+          }
 
         }
 
       });
 
-      // --------------------------------------------------------
-      // FALLBACK JOIN COUNT
-      // --------------------------------------------------------
-
-      /*
-       * Agar tournament documents mein joinedPlayers
-       * maintained nahi hai, actual joinRequests se count.
-       */
+      // ========================================================
+      // JOIN REQUEST FALLBACK
+      // ========================================================
 
       if (
         totalJoinedPlayers === 0 &&
         joinsSnap.size > 0
       ) {
 
-        totalJoinedPlayers =
+        const validJoins =
           joinsSnap.docs.filter(
             (doc) => {
 
@@ -9203,16 +9258,20 @@ app.get(
               );
 
             }
-          ).length;
+          );
+
+        totalJoinedPlayers =
+          validJoins.length;
 
       }
 
-      // --------------------------------------------------------
+      // ========================================================
       // DEPOSITS
-      // --------------------------------------------------------
+      // ========================================================
 
       let pendingDeposits = 0;
       let totalDeposited = 0;
+
 
       depositsSnap.forEach((doc) => {
 
@@ -9231,11 +9290,15 @@ app.get(
             .trim()
             .toLowerCase();
 
+
         if (
           status === "pending"
         ) {
+
           pendingDeposits++;
+
         }
+
 
         if (
           status === "approved" ||
@@ -9243,20 +9306,27 @@ app.get(
           status === "success" ||
           status === "successful"
         ) {
-          totalDeposited +=
+
+          if (
             Number.isFinite(amount)
-              ? amount
-              : 0;
+          ) {
+
+            totalDeposited +=
+              amount;
+
+          }
+
         }
 
       });
 
-      // --------------------------------------------------------
+      // ========================================================
       // WITHDRAWALS
-      // --------------------------------------------------------
+      // ========================================================
 
       let pendingWithdrawals = 0;
       let totalWithdrawn = 0;
+
 
       withdrawalsSnap.forEach((doc) => {
 
@@ -9275,11 +9345,15 @@ app.get(
             .trim()
             .toLowerCase();
 
+
         if (
           status === "pending"
         ) {
+
           pendingWithdrawals++;
+
         }
+
 
         if (
           status === "approved" ||
@@ -9288,25 +9362,68 @@ app.get(
           status === "success" ||
           status === "successful"
         ) {
-          totalWithdrawn +=
+
+          if (
             Number.isFinite(amount)
-              ? amount
-              : 0;
+          ) {
+
+            totalWithdrawn +=
+              amount;
+
+          }
+
         }
 
       });
 
-      // --------------------------------------------------------
+      // ========================================================
+      // SUPPORT TICKETS
+      // ========================================================
+
+      let totalTickets = 0;
+      let openTickets = 0;
+      let closedTickets = 0;
+
+
+      supportSnap.forEach((doc) => {
+
+        totalTickets++;
+
+        const data =
+          doc.data() || {};
+
+        const status =
+          String(
+            data.status || "open"
+          )
+            .trim()
+            .toLowerCase();
+
+
+        if (
+          status === "closed" ||
+          status === "resolved"
+        ) {
+
+          closedTickets++;
+
+        } else {
+
+          openTickets++;
+
+        }
+
+      });
+
+      // ========================================================
       // TRANSACTION COUNT
-      // --------------------------------------------------------
+      // ========================================================
 
       /*
-       * Existing wallet ledger users ke andar hai.
-       * Isliye har user ka ledger separately read karne ke
-       * bajay yahan transaction count ko unsafe guess nahi
-       * karenge.
+       * Wallet ledger users/{uid}/walletLedger mein hai.
+       * Har user ka ledger individually read karna expensive hai.
        *
-       * Dashboard ko known financial request counts milenge.
+       * Isliye known financial/activity request count use karenge.
        */
 
       const totalTransactions =
@@ -9314,9 +9431,74 @@ app.get(
         withdrawalsSnap.size +
         joinsSnap.size;
 
-      // --------------------------------------------------------
-      // RESPONSE
-      // --------------------------------------------------------
+      // ========================================================
+      // ACTION REQUIRED
+      // ========================================================
+
+      const actionRequired =
+        pendingDeposits +
+        pendingWithdrawals +
+        resultPendingTournaments +
+        openTickets;
+
+      // ========================================================
+      // DASHBOARD DATA
+      // ========================================================
+
+      const overview = {
+
+        totalUsers,
+
+        activeUsers,
+
+        blockedUsers,
+
+
+        totalTournaments,
+
+        upcomingTournaments,
+
+        liveTournaments,
+
+        completedTournaments,
+
+        resultPendingTournaments,
+
+        cancelledTournaments,
+
+
+        totalJoinedPlayers,
+
+        liveJoinedPlayers,
+
+
+        pendingDeposits,
+
+        totalDeposited,
+
+
+        pendingWithdrawals,
+
+        totalWithdrawn,
+
+
+        totalTransactions,
+
+
+        totalTickets,
+
+        openTickets,
+
+        closedTickets,
+
+
+        actionRequired
+
+      };
+
+      // ========================================================
+      // FINAL RESPONSE
+      // ========================================================
 
       return res.json({
 
@@ -9325,44 +9507,101 @@ app.get(
         updatedAt:
           new Date().toISOString(),
 
+        overview,
+
+        // ------------------------------------------------------
+        // Backward-compatible structured data
+        // ------------------------------------------------------
+
         users: {
-          total: totalUsers,
-          active: activeUsers
+
+          total:
+            totalUsers,
+
+          active:
+            activeUsers,
+
+          blocked:
+            blockedUsers
+
         },
+
 
         tournaments: {
-          total: totalTournaments,
-          upcoming: upcomingTournaments,
-          live: liveTournaments,
-          completed: completedTournaments,
+
+          total:
+            totalTournaments,
+
+          upcoming:
+            upcomingTournaments,
+
+          live:
+            liveTournaments,
+
+          completed:
+            completedTournaments,
+
           resultPending:
-            resultPendingTournaments
+            resultPendingTournaments,
+
+          cancelled:
+            cancelledTournaments
+
         },
+
 
         players: {
+
           totalJoined:
             totalJoinedPlayers,
+
           liveJoined:
             liveJoinedPlayers
+
         },
+
 
         deposits: {
+
           pending:
             pendingDeposits,
+
           total:
             totalDeposited
+
         },
+
 
         withdrawals: {
+
           pending:
             pendingWithdrawals,
+
           total:
             totalWithdrawn
+
         },
 
+
+        support: {
+
+          total:
+            totalTickets,
+
+          open:
+            openTickets,
+
+          closed:
+            closedTickets
+
+        },
+
+
         transactions: {
+
           total:
             totalTransactions
+
         }
 
       });
@@ -15333,6 +15572,234 @@ app.get("/admin/finance/summary", requireAdmin, async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN USERS LIST
+// Real Firestore users only
+// ============================================================
+
+app.get(
+  "/admin/users",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const search = String(
+        req.query.q || ""
+      ).trim().toLowerCase();
+
+      const statusFilter = String(
+        req.query.status || ""
+      ).trim().toLowerCase();
+
+      const snap = await firestore
+        .collection("users")
+        .get();
+
+      const users = [];
+
+      snap.forEach((doc) => {
+
+        const data = doc.data() || {};
+
+        const user = {
+          id: doc.id,
+
+          userId: doc.id,
+
+          username:
+            data.username ||
+            data.displayName ||
+            data.name ||
+            "",
+
+          name:
+            data.name ||
+            data.username ||
+            "",
+
+          email:
+            data.email ||
+            "",
+
+          freeFireName:
+            data.freeFireName ||
+            "",
+
+          freeFireUid:
+            data.freeFireUid ||
+            data.freefireUid ||
+            "",
+
+          phone:
+            data.phone ||
+            "",
+
+          status:
+            data.status ||
+            (data.isBlocked === true
+              ? "blocked"
+              : "active"),
+
+          isBlocked:
+            data.isBlocked === true,
+
+          walletBalance:
+            Number(
+              data.walletBalance || 0
+            ),
+
+          earnings:
+            Number(
+              data.earnings ??
+              data.totalEarnings ??
+              0
+            ),
+
+          wins:
+            Number(
+              data.wins ??
+              data.totalWins ??
+              0
+            ),
+
+          kills:
+            Number(
+              data.kills ??
+              data.totalKills ??
+              0
+            ),
+
+          referralCode:
+            data.referralCode ||
+            "",
+
+          referredBy:
+            data.referredBy ||
+            "",
+
+          createdAt:
+            data.createdAt ||
+            null,
+
+          updatedAt:
+            data.updatedAt ||
+            null
+        };
+
+        // ------------------------------------------------------
+        // STATUS FILTER
+        // ------------------------------------------------------
+
+        const userStatus =
+          String(
+            user.status || ""
+          ).toLowerCase();
+
+        if (
+          statusFilter &&
+          statusFilter !== userStatus
+        ) {
+          return;
+        }
+
+        // ------------------------------------------------------
+        // SEARCH FILTER
+        // ------------------------------------------------------
+
+        if (search) {
+
+          const searchable = [
+            user.id,
+            user.username,
+            user.name,
+            user.email,
+            user.freeFireName,
+            user.freeFireUid,
+            user.phone,
+            user.referralCode
+          ]
+            .join(" ")
+            .toLowerCase();
+
+          if (
+            !searchable.includes(search)
+          ) {
+            return;
+          }
+        }
+
+        users.push(user);
+
+      });
+
+      // --------------------------------------------------------
+      // NEWEST USERS FIRST
+      // --------------------------------------------------------
+
+      const getTime = (value) => {
+
+        if (!value) return 0;
+
+        if (
+          typeof value.toMillis ===
+          "function"
+        ) {
+          return value.toMillis();
+        }
+
+        if (
+          typeof value.toDate ===
+          "function"
+        ) {
+          return value.toDate().getTime();
+        }
+
+        const parsed =
+          new Date(value).getTime();
+
+        return Number.isFinite(parsed)
+          ? parsed
+          : 0;
+      };
+
+      users.sort(
+        (a, b) =>
+          getTime(b.createdAt) -
+          getTime(a.createdAt)
+      );
+
+      return res.json({
+        ok: true,
+        count: users.length,
+        users
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USERS LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Users load nahi ho sake"
+      });
+
+    }
+
+  }
+);
 
 // ------------------------------------------------------------
 // ADMIN — USER UPDATE
