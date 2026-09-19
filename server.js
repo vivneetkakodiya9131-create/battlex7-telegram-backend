@@ -16428,6 +16428,144 @@ app.get(
 );
 
 // ============================================================
+// BATTLE X7 ARENA — ADMIN MATCHES / JOIN REQUESTS
+// Reads real Firestore joinRequests
+// ============================================================
+
+app.get(
+  "/admin/matches",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const snap = await firestore
+        .collection("joinRequests")
+        .get();
+
+      const matches = [];
+
+      for (const doc of snap.docs) {
+
+        const data = doc.data() || {};
+
+        matches.push({
+
+          id:
+            doc.id,
+
+          userId:
+            String(
+              data.userId ||
+              data.uid ||
+              ""
+            ),
+
+          tournamentId:
+            String(
+              data.tournamentId ||
+              ""
+            ),
+
+          tournamentTitle:
+            String(
+              data.tournamentTitle ||
+              data.tournamentName ||
+              ""
+            ),
+
+          entryFee:
+            Number(
+              data.entryFee ??
+              data.entry ??
+              0
+            ),
+
+          status:
+            String(
+              data.status ||
+              "pending"
+            ),
+
+          createdAt:
+            data.createdAt ||
+            data.joinedAt ||
+            null
+
+        });
+      }
+
+      const getTime = (value) => {
+
+        if (!value) return 0;
+
+        if (
+          typeof value.toMillis ===
+          "function"
+        ) {
+          return value.toMillis();
+        }
+
+        if (
+          typeof value.toDate ===
+          "function"
+        ) {
+          return value.toDate().getTime();
+        }
+
+        const parsed =
+          new Date(value).getTime();
+
+        return Number.isFinite(parsed)
+          ? parsed
+          : 0;
+      };
+
+      matches.sort(
+        (a, b) =>
+          getTime(b.createdAt) -
+          getTime(a.createdAt)
+      );
+
+      return res.json({
+
+        ok: true,
+
+        count:
+          matches.length,
+
+        matches
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN MATCHES LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Matches / join requests load nahi ho sake"
+
+      });
+
+    }
+  }
+);
+
+// ============================================================
 // BATTLE X7 ARENA — ADMIN UNIFIED TRANSACTIONS
 // ============================================================
 
