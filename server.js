@@ -262,6 +262,63 @@ async function requireFirebaseUser(req, res) {
 }
 
 // ============================================================
+// BATTLE X7 ARENA — USER LIVE HEARTBEAT
+// Updates the user's latest activity timestamp
+// ============================================================
+
+app.post(
+  "/user/heartbeat",
+  async (req, res) => {
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase is not configured"
+      });
+    }
+
+    const decoded =
+      await requireFirebaseUser(req, res);
+
+    if (!decoded) return;
+
+    try {
+
+      const now = new Date();
+
+      await firestore
+        .collection("users")
+        .doc(decoded.uid)
+        .set(
+          {
+            lastActiveAt: now
+          },
+          {
+            merge: true
+          }
+        );
+
+      return res.json({
+        ok: true,
+        updatedAt: now.toISOString()
+      });
+
+    } catch (error) {
+
+      console.error(
+        "USER HEARTBEAT ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to update user activity"
+      });
+    }
+  }
+);
+
+// ============================================================
 // BATTLE X7 ARENA — TOURNAMENT JOIN / ENTRY
 // Server-authoritative wallet deduction + atomic join lock
 // ============================================================
@@ -8948,6 +9005,260 @@ app.post(
 );
 
 // ============================================================
+// BATTLE X7 ARENA — TOURNAMENT EARNINGS
+// Completed Tournament Entry Collection - Prize Payout
+// ============================================================
+
+app.get(
+  "/admin/tournament-earnings",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase is not configured"
+      });
+    }
+
+    try {
+
+      // --------------------------------------------------------
+      // LOAD TOURNAMENTS + JOIN REQUESTS
+      // --------------------------------------------------------
+
+      const [
+        tournamentsSnap,
+        joinsSnap
+      ] = await Promise.all([
+
+        firestore
+          .collection("tournaments")
+          .get(),
+
+        firestore
+          .collection("joinRequests")
+          .get()
+
+      ]);
+
+      const tournaments = [];
+
+      let totalEntryCollection = 0;
+      let totalPrizePaid = 0;
+
+      // --------------------------------------------------------
+      // ONLY COMPLETED TOURNAMENTS
+      // --------------------------------------------------------
+
+      for (const tournamentDoc of tournamentsSnap.docs) {
+
+        const tournament =
+          tournamentDoc.data() || {};
+
+        const tournamentId =
+          tournamentDoc.id;
+
+        const tournamentStatus =
+          String(
+            tournament.status || ""
+          )
+            .trim()
+            .toUpperCase();
+
+        if (
+          tournamentStatus !==
+          "COMPLETED"
+        ) {
+          continue;
+        }
+
+        // ------------------------------------------------------
+        // ENTRY COLLECTION
+        // ------------------------------------------------------
+
+        let entryCollection = 0;
+
+        joinsSnap.docs.forEach((joinDoc) => {
+
+          const join =
+            joinDoc.data() || {};
+
+          const joinTournamentId =
+            String(
+              join.tournamentId || ""
+            ).trim();
+
+          if (
+            joinTournamentId !==
+            tournamentId
+          ) {
+            return;
+          }
+
+          const joinStatus =
+            String(
+              join.status || ""
+            )
+              .trim()
+              .toLowerCase();
+
+          // Rejected/cancelled joins are not counted
+          if (
+            joinStatus === "rejected" ||
+            joinStatus === "cancelled" ||
+            joinStatus === "canceled"
+          ) {
+            return;
+          }
+
+          const entryFee =
+            Number(
+              join.entryFee ??
+              join.entry ??
+              0
+            );
+
+          if (
+            Number.isFinite(entryFee) &&
+            entryFee > 0
+          ) {
+            entryCollection +=
+              entryFee;
+          }
+
+        });
+
+        // ------------------------------------------------------
+        // PRIZE PAYOUT
+        // ------------------------------------------------------
+
+        const resultsSnap =
+          await tournamentDoc.ref
+            .collection("results")
+            .get();
+
+        let prizePaid = 0;
+
+        resultsSnap.forEach((resultDoc) => {
+
+          const result =
+            resultDoc.data() || {};
+
+          // Only actually settled results
+          if (
+            result.settled !== true
+          ) {
+            return;
+          }
+
+          const prize =
+            Number(
+              result.prizeWon ??
+              result.winningAmount ??
+              result.winningsAmount ??
+              0
+            );
+
+          if (
+            Number.isFinite(prize) &&
+            prize > 0
+          ) {
+            prizePaid += prize;
+          }
+
+        });
+
+        // ------------------------------------------------------
+        // TOURNAMENT EARNING / MARGIN
+        // ------------------------------------------------------
+
+        const margin =
+          entryCollection -
+          prizePaid;
+
+        totalEntryCollection +=
+          entryCollection;
+
+        totalPrizePaid +=
+          prizePaid;
+
+        tournaments.push({
+
+          tournamentId,
+
+          title:
+            tournament.title ||
+            tournament.name ||
+            tournamentId,
+
+          status:
+            tournament.status ||
+            "COMPLETED",
+
+          entryCollection,
+
+          prizePaid,
+
+          margin
+
+        });
+
+      }
+
+      // Highest margin first
+      tournaments.sort(
+        (a, b) =>
+          b.margin - a.margin
+      );
+
+      // --------------------------------------------------------
+      // FINAL RESPONSE
+      // --------------------------------------------------------
+
+      return res.json({
+
+        ok: true,
+
+        totalEntryCollection,
+
+        totalPrizePaid,
+
+        totalEarnings:
+          totalEntryCollection -
+          totalPrizePaid,
+
+        tournaments
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "TOURNAMENT EARNINGS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Failed to calculate tournament earnings"
+
+      });
+    }
+  }
+);
+
+// ============================================================
 // BATTLE X7 ARENA — ADMIN DASHBOARD OVERVIEW
 // ADVANCED LIVE CONTROL CENTER
 // Real Firestore data only
@@ -9043,15 +9354,48 @@ app.get(
         }
 
         const lastActive =
-          data.lastActiveAt ||
-          data.lastSeenAt ||
-          data.lastLoginAt;
+  data.lastActiveAt ||
+  data.lastSeenAt ||
+  data.lastLoginAt;
 
-        if (lastActive) {
-          activeUsers++;
-        }
+if (lastActive) {
 
-      });
+  let lastActiveMs = 0;
+
+  if (
+    typeof lastActive.toMillis === "function"
+  ) {
+    lastActiveMs = lastActive.toMillis();
+
+  } else if (
+    lastActive instanceof Date
+  ) {
+    lastActiveMs = lastActive.getTime();
+
+  } else {
+
+    const parsed =
+      new Date(lastActive).getTime();
+
+    if (
+      Number.isFinite(parsed)
+    ) {
+      lastActiveMs = parsed;
+    }
+  }
+
+  // User is considered LIVE
+  // if activity was recorded within last 2 minutes
+  
+  const twoMinutesAgo =
+    Date.now() - (2 * 60 * 1000);
+
+  if (
+    lastActiveMs >= twoMinutesAgo
+  ) {
+    activeUsers++;
+  }
+}
 
       // ========================================================
       // TOURNAMENTS
