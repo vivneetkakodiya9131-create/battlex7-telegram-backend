@@ -19891,6 +19891,133 @@ app.get(
     }
   }
 );
+// ============================================================
+// BATTLE X7 ARENA — ADMIN USER WALLET ADJUST COMPATIBILITY API
+// Admin Panel → /admin/users/:userId/wallet-adjust
+// ============================================================
+
+app.post(
+  "/admin/users/:userId/wallet-adjust",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const userId =
+        String(
+          req.params.userId || ""
+        ).trim();
+
+      const action =
+        String(
+          req.body.action || ""
+        )
+          .trim()
+          .toLowerCase();
+
+      const amount =
+        Number(req.body.amount);
+
+      const reason =
+        String(
+          req.body.reason || ""
+        ).trim();
+
+      if (!userId) {
+        return res.status(400).json({
+          ok: false,
+          error: "User ID is required"
+        });
+      }
+
+      if (
+        !["credit", "debit"].includes(
+          action
+        )
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Action must be credit or debit"
+        });
+      }
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid amount"
+        });
+      }
+
+      if (!reason) {
+        return res.status(400).json({
+          ok: false,
+          error: "Reason is required"
+        });
+      }
+
+      const walletResponse = await fetch(
+        `${req.protocol}://${req.get("host")}/admin/wallet/adjust`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            "Authorization":
+              req.headers.authorization || ""
+          },
+          body: JSON.stringify({
+            userId,
+            direction:
+              action === "credit"
+                ? "credit"
+                : "debit",
+            amount,
+            reason
+          })
+        }
+      );
+
+      const data =
+        await walletResponse.json();
+
+      return res
+        .status(walletResponse.status)
+        .json(data);
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USER WALLET ADJUST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Wallet adjustment failed"
+      });
+    }
+  }
+);
+
 
 // ============================================================
 // BATTLE X7 ARENA — SECURE MANUAL WALLET ADJUSTMENT
