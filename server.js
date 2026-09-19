@@ -5783,6 +5783,235 @@ app.post(
 // Single User + Broadcast Notification
 // ============================================================
 
+// ============================================================
+// ADMIN NOTIFICATIONS — PANEL COMPATIBILITY ROUTE
+// Supports existing Admin Panel POST /admin/notifications
+// ============================================================
+
+app.post(
+  "/admin/notifications",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const userId =
+        String(
+          req.body?.userId || ""
+        ).trim();
+
+      const title =
+        String(
+          req.body?.title || ""
+        ).trim();
+
+      const message =
+        String(
+          req.body?.message || ""
+        ).trim();
+
+      if (!title) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification title is required"
+        });
+      }
+
+      if (!message) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification message is required"
+        });
+      }
+
+      if (
+        title.length > 200 ||
+        message.length > 4000
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Notification data is too long"
+        });
+      }
+
+      // --------------------------------------------------------
+      // BROADCAST — blank User ID
+      // --------------------------------------------------------
+
+      if (!userId) {
+
+        const usersSnap =
+          await firestore
+            .collection("users")
+            .get();
+
+        let sent = 0;
+        let batch =
+          firestore.batch();
+
+        let batchCount = 0;
+
+        const now =
+          admin.firestore
+            .FieldValue
+            .serverTimestamp();
+
+        for (const userDoc of usersSnap.docs) {
+
+          const notificationRef =
+            userDoc.ref
+              .collection("notifications")
+              .doc();
+
+          batch.set(
+            notificationRef,
+            {
+              type:
+                "announcement",
+
+              title,
+
+              message,
+
+              read: false,
+
+              createdAt: now,
+
+              updatedAt: now,
+
+              sentBy:
+                adminUser.uid,
+
+              source:
+                "admin"
+            }
+          );
+
+          sent++;
+          batchCount++;
+
+          if (batchCount >= 400) {
+
+            await batch.commit();
+
+            batch =
+              firestore.batch();
+
+            batchCount = 0;
+          }
+        }
+
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+
+        return res.json({
+          ok: true,
+          sent,
+          target:
+            "all",
+          message:
+            "Broadcast notification sent successfully"
+        });
+      }
+
+      // --------------------------------------------------------
+      // SINGLE USER
+      // --------------------------------------------------------
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(userId);
+
+      const userSnap =
+        await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User not found"
+        });
+      }
+
+      const notificationRef =
+        userRef
+          .collection("notifications")
+          .doc();
+
+      const now =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      await notificationRef.set({
+        type:
+          "admin",
+
+        title,
+
+        message,
+
+        read: false,
+
+        createdAt: now,
+
+        updatedAt: now,
+
+        sentBy:
+          adminUser.uid,
+
+        source:
+          "admin"
+      });
+
+      return res.json({
+        ok: true,
+
+        notificationId:
+          notificationRef.id,
+
+        userId,
+
+        message:
+          "Notification sent successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN NOTIFICATIONS PANEL ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Notification send nahi ho saki"
+      });
+    }
+  }
+);
+
 // ------------------------------------------------------------
 // SEND NOTIFICATION TO ONE USER
 // ------------------------------------------------------------
@@ -9111,6 +9340,7 @@ app.get(
               .toLowerCase();
 
           // Rejected/cancelled joins are not counted
+          
           if (
             joinStatus === "rejected" ||
             joinStatus === "cancelled" ||
@@ -9214,6 +9444,7 @@ app.get(
       }
 
       // Highest margin first
+      
       tournaments.sort(
         (a, b) =>
           b.margin - a.margin
@@ -9255,6 +9486,286 @@ app.get(
 
       });
     }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN USERS LIST
+// Real Firestore user data
+// Search + Status Filter
+// ============================================================
+
+app.get(
+  "/admin/users",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const search =
+        String(
+          req.query.search || ""
+        )
+          .trim()
+          .toLowerCase();
+
+      const statusFilter =
+        String(
+          req.query.status || ""
+        )
+          .trim()
+          .toLowerCase();
+
+      const usersSnap =
+        await firestore
+          .collection("users")
+          .get();
+
+      const users = [];
+
+      usersSnap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        const username =
+          String(
+            data.username ||
+            data.name ||
+            ""
+          ).trim();
+
+        const freeFireName =
+          String(
+            data.freeFireName || ""
+          ).trim();
+
+        const freeFireUid =
+          String(
+            data.freeFireUid || ""
+          ).trim();
+
+        const phone =
+          String(
+            data.phone || ""
+          ).trim();
+
+        const userStatus =
+          String(
+            data.status ||
+            (data.isBlocked === true
+              ? "blocked"
+              : "active")
+          )
+            .trim()
+            .toLowerCase();
+
+        // ----------------------------------------------------
+        // SEARCH FILTER
+        // ----------------------------------------------------
+
+        if (search) {
+
+          const searchable =
+            [
+              doc.id,
+              username,
+              freeFireName,
+              freeFireUid,
+              phone
+            ]
+              .join(" ")
+              .toLowerCase();
+
+          if (
+            !searchable.includes(search)
+          ) {
+            return;
+          }
+        }
+
+        // ----------------------------------------------------
+        // STATUS FILTER
+        // ----------------------------------------------------
+
+        if (
+          statusFilter &&
+          statusFilter !== "all" &&
+          userStatus !== statusFilter
+        ) {
+          return;
+        }
+
+        users.push({
+
+          id:
+            doc.id,
+
+          userId:
+            doc.id,
+
+          username,
+
+          name:
+            data.name || "",
+
+          freeFireName,
+
+          freeFireUid,
+
+          phone,
+
+          dob:
+            data.dob || "",
+
+          photoURL:
+            data.photoURL || "",
+
+          status:
+            data.status ||
+            (
+              data.isBlocked === true
+                ? "blocked"
+                : "active"
+            ),
+
+          isBlocked:
+            data.isBlocked === true,
+
+          walletBalance:
+            Number(
+              data.walletBalance || 0
+            ),
+
+          earnings:
+            Number(
+              data.earnings || 0
+            ),
+
+          totalEarnings:
+            Number(
+              data.totalEarnings || 0
+            ),
+
+          wins:
+            Number(
+              data.wins || 0
+            ),
+
+          totalWins:
+            Number(
+              data.totalWins || 0
+            ),
+
+          kills:
+            Number(
+              data.kills || 0
+            ),
+
+          totalKills:
+            Number(
+              data.totalKills || 0
+            ),
+
+          lastActiveAt:
+            data.lastActiveAt ||
+            data.lastSeenAt ||
+            data.lastLoginAt ||
+            null,
+
+          createdAt:
+            data.createdAt ||
+            null,
+
+          updatedAt:
+            data.updatedAt ||
+            null
+
+        });
+
+      });
+
+      // ----------------------------------------------------
+      // NEWEST USERS FIRST
+      // ----------------------------------------------------
+
+      users.sort(
+        (a, b) => {
+
+          const getTime =
+            (value) => {
+
+              if (!value) {
+                return 0;
+              }
+
+              if (
+                typeof value.toMillis ===
+                "function"
+              ) {
+                return value.toMillis();
+              }
+
+              if (
+                typeof value.toDate ===
+                "function"
+              ) {
+                return value
+                  .toDate()
+                  .getTime();
+              }
+
+              const parsed =
+                new Date(value).getTime();
+
+              return Number.isFinite(parsed)
+                ? parsed
+                : 0;
+            };
+
+          return (
+            getTime(b.createdAt) -
+            getTime(a.createdAt)
+          );
+        }
+      );
+
+      return res.json({
+
+        ok: true,
+
+        total:
+          users.length,
+
+        users
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USERS LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Users load nahi ho sake"
+
+      });
+
+    }
+
   }
 );
 
@@ -9776,6 +10287,129 @@ if (lastActive) {
         withdrawalsSnap.size +
         joinsSnap.size;
 
+// ========================================================
+// TOURNAMENT EARNINGS
+// ========================================================
+
+let totalEntryCollection = 0;
+let totalPrizePaid = 0;
+
+for (const tournamentDoc of tournamentsSnap.docs) {
+
+  const tournament =
+    tournamentDoc.data() || {};
+
+  const tournamentStatus =
+    String(
+      tournament.status || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  if (
+    tournamentStatus !==
+    "COMPLETED"
+  ) {
+    continue;
+  }
+
+  const tournamentId =
+    tournamentDoc.id;
+
+  let entryCollection = 0;
+
+  joinsSnap.docs.forEach((joinDoc) => {
+
+    const join =
+      joinDoc.data() || {};
+
+    if (
+      String(
+        join.tournamentId || ""
+      ).trim() !==
+      tournamentId
+    ) {
+      return;
+    }
+
+    const joinStatus =
+      String(
+        join.status || ""
+      )
+        .trim()
+        .toLowerCase();
+
+    if (
+      joinStatus === "rejected" ||
+      joinStatus === "cancelled" ||
+      joinStatus === "canceled"
+    ) {
+      return;
+    }
+
+    const entryFee =
+      Number(
+        join.entryFee ??
+        join.entry ??
+        0
+      );
+
+    if (
+      Number.isFinite(entryFee) &&
+      entryFee > 0
+    ) {
+      entryCollection +=
+        entryFee;
+    }
+
+  });
+
+  const resultsSnap =
+    await tournamentDoc.ref
+      .collection("results")
+      .get();
+
+  let prizePaid = 0;
+
+  resultsSnap.forEach((resultDoc) => {
+
+    const result =
+      resultDoc.data() || {};
+
+    if (
+      result.settled !== true
+    ) {
+      return;
+    }
+
+    const prize =
+      Number(
+        result.prizeWon ??
+        result.winningAmount ??
+        result.winningsAmount ??
+        0
+      );
+
+    if (
+      Number.isFinite(prize) &&
+      prize > 0
+    ) {
+      prizePaid += prize;
+    }
+
+  });
+
+  totalEntryCollection +=
+    entryCollection;
+
+  totalPrizePaid +=
+    prizePaid;
+}
+
+const tournamentEarnings =
+  totalEntryCollection -
+  totalPrizePaid;
+
       // ========================================================
       // ACTION REQUIRED
       // ========================================================
@@ -9798,7 +10432,15 @@ if (lastActive) {
 
         blockedUsers,
 
+        tournamentEntryCollection:
+          totalEntryCollection,
 
+        tournamentPrizePaid:
+          totalPrizePaid,
+
+        tournamentEarnings:
+          tournamentEarnings,
+        
         totalTournaments,
 
         upcomingTournaments,
@@ -16151,7 +16793,9 @@ app.get(
 // Safe fields only
 // ------------------------------------------------------------
 
-app.patch("/admin/user/:userId", requireAdmin, async (req, res) => {
+app.patch(
+  ["/admin/user/:userId", "/admin/users/:userId"],
+  requireAdmin, async (req, res) => {
 
   try {
 
@@ -17147,7 +17791,7 @@ app.get(
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN TOURNAMENT MANAGEMENT
-// STEP 8 — CREATE / READ / UPDATE / DELETE
+// CREATE / READ / UPDATE / DELETE
 // ============================================================
 
 const X7_TOURNAMENT_STATUSES = [
@@ -19782,6 +20426,297 @@ async function x7CreateAdminAuditLog({
     );
   }
 }
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN SETTINGS
+// App configuration for Admin Panel
+// ============================================================
+
+app.get(
+  "/admin/settings",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const settingsRef =
+        firestore
+          .collection("settings")
+          .doc("app");
+
+      const snap =
+        await settingsRef.get();
+
+      const data =
+        snap.exists
+          ? (snap.data() || {})
+          : {};
+
+      return res.json({
+        ok: true,
+
+        settings: {
+          minDeposit:
+            Number(data.minDeposit ?? 20),
+
+          maxDeposit:
+            Number(data.maxDeposit ?? 10000),
+
+          minWithdrawal:
+            Number(data.minWithdrawal ?? 50),
+
+          maxWithdrawal:
+            Number(data.maxWithdrawal ?? 10000),
+
+          maintenance:
+            data.maintenance === true,
+
+          otpExpiryMinutes:
+            Number(
+              data.otpExpiryMinutes ?? 5
+            )
+        }
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN SETTINGS GET ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Settings load nahi ho saki"
+      });
+    }
+  }
+);
+
+
+app.post(
+  "/admin/settings",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const minDeposit =
+        Number(req.body?.minDeposit);
+
+      const maxDeposit =
+        Number(req.body?.maxDeposit);
+
+      const minWithdrawal =
+        Number(req.body?.minWithdrawal);
+
+      const maxWithdrawal =
+        Number(req.body?.maxWithdrawal);
+
+      const otpExpiryMinutes =
+        Number(req.body?.otpExpiryMinutes);
+
+      const maintenance =
+        req.body?.maintenance === true;
+
+      if (
+        !Number.isFinite(minDeposit) ||
+        !Number.isFinite(maxDeposit) ||
+        !Number.isFinite(minWithdrawal) ||
+        !Number.isFinite(maxWithdrawal) ||
+        !Number.isFinite(otpExpiryMinutes)
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid settings values"
+        });
+      }
+
+      if (
+        minDeposit < 0 ||
+        maxDeposit < minDeposit ||
+        minWithdrawal < 0 ||
+        maxWithdrawal < minWithdrawal ||
+        otpExpiryMinutes < 1
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Invalid settings range"
+        });
+      }
+
+      await firestore
+        .collection("settings")
+        .doc("app")
+        .set(
+          {
+            minDeposit,
+            maxDeposit,
+            minWithdrawal,
+            maxWithdrawal,
+            maintenance,
+            otpExpiryMinutes,
+
+            updatedAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp(),
+
+            updatedBy:
+              adminUser.uid
+          },
+          {
+            merge: true
+          }
+        );
+
+      return res.json({
+        ok: true,
+
+        message:
+          "Settings saved successfully"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN SETTINGS SAVE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Settings save nahi ho saki"
+      });
+    }
+  }
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN ACTIVITY LOGS API
+// Admin Panel Logs
+// MASTER ADMIN ONLY
+// ============================================================
+
+app.get(
+  "/admin/logs",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error: "Firebase not configured"
+      });
+    }
+
+    try {
+
+      const snap =
+        await firestore
+          .collection("adminLogs")
+          .orderBy("createdAt", "desc")
+          .limit(500)
+          .get();
+
+      const logs = [];
+
+      snap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        logs.push({
+          id: doc.id,
+
+          createdAt:
+            data.createdAt || null,
+
+          adminEmail:
+            data.adminEmail ||
+            "",
+
+          adminUid:
+            data.adminUid ||
+            data.uid ||
+            "",
+
+          action:
+            data.action ||
+            "",
+
+          target:
+            data.target ||
+            data.targetId ||
+            "",
+
+          result:
+            data.result ||
+            data.status ||
+            "success"
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+        logs
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN LOGS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Admin logs load nahi ho sake"
+      });
+    }
+  }
+);
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN CONTENT CONTROL
