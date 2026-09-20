@@ -9994,7 +9994,8 @@ app.get(
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN USERS LIST
-// FINAL — FIREBASE AUTH + FIRESTORE
+// FINAL STABLE USERS API
+// FIREBASE AUTH + FIRESTORE
 // ============================================================
 
 app.get(
@@ -10004,160 +10005,303 @@ app.get(
 
     try {
 
-      if (!firebaseReady) {
-
+      if (!firebaseReady || !firestore) {
         return res.status(503).json({
           ok: false,
           success: false,
-          error: "Firebase Admin is not configured"
+          error: "Firebase Admin is not ready"
         });
+      }
+
+      const search = String(
+        req.query.q ||
+        req.query.search ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const statusFilter = String(
+        req.query.status ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      // ========================================================
+      // TIMEOUT HELPER
+      // किसी Firebase service के slow होने पर पूरा API hang नहीं होगा
+      // ========================================================
+
+      const withTimeout = (
+        promise,
+        ms,
+        label
+      ) => {
+
+        let timer;
+
+        const timeoutPromise =
+          new Promise((_, reject) => {
+
+            timer = setTimeout(() => {
+
+              reject(
+                new Error(
+                  label + " timeout"
+                )
+              );
+
+            }, ms);
+
+          });
+
+        return Promise.race([
+          promise,
+          timeoutPromise
+        ]).finally(() => {
+
+          clearTimeout(timer);
+
+        });
+
+      };
+
+      // ========================================================
+      // FIRESTORE + FIREBASE AUTH
+      // दोनों एक साथ चलेंगे
+      // ========================================================
+
+      const firestorePromise =
+        withTimeout(
+          firestore
+            .collection("users")
+            .get(),
+          5000,
+          "Firestore users"
+        );
+
+      const authPromise =
+        withTimeout(
+          admin
+            .auth()
+            .listUsers(1000),
+          5000,
+          "Firebase Auth users"
+        );
+
+      const results =
+        await Promise.allSettled([
+          firestorePromise,
+          authPromise
+        ]);
+
+      const firestoreResult =
+        results[0];
+
+      const authResult =
+        results[1];
+
+      // ========================================================
+      // USERS MAP
+      // ========================================================
+
+      const userMap =
+        new Map();
+
+      // ========================================================
+      // FIRESTORE USERS
+      // ========================================================
+
+      if (
+        firestoreResult.status ===
+        "fulfilled"
+      ) {
+
+        const snapshot =
+          firestoreResult.value;
+
+        snapshot.forEach((doc) => {
+
+          const data =
+            doc.data() || {};
+
+          userMap.set(
+            String(doc.id),
+            {
+              id: String(doc.id),
+              userId: String(doc.id),
+              ...data
+            }
+          );
+
+        });
+
+      } else {
+
+        console.error(
+          "ADMIN USERS FIRESTORE ERROR:",
+          firestoreResult.reason?.message ||
+          firestoreResult.reason
+        );
 
       }
 
-      const search =
-        String(
-          req.query.q ||
-          req.query.search ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
-
-      const statusFilter =
-        String(
-          req.query.status ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
-
       // ========================================================
-      // STEP 1 — FIREBASE AUTH USERS
+      // FIREBASE AUTH USERS
       // ========================================================
 
-      let authUsers = [];
+      if (
+        authResult.status ===
+        "fulfilled"
+      ) {
 
-      try {
+        const authUsers =
+          authResult.value?.users || [];
 
-        const authResult =
-          await admin
-            .auth()
-            .listUsers(1000);
+        for (
+          const authUser
+          of authUsers
+        ) {
 
-        authUsers =
-          Array.isArray(authResult.users)
-            ? authResult.users
-            : [];
+          const uid =
+            String(
+              authUser.uid || ""
+            ).trim();
 
-      } catch (authError) {
+          if (!uid) {
+            continue;
+          }
+
+          const existing =
+            userMap.get(uid) || {};
+
+          userMap.set(
+            uid,
+            {
+
+              ...existing,
+
+              id: uid,
+
+              userId: uid,
+
+              email:
+                existing.email ||
+                authUser.email ||
+                "",
+
+              username:
+                existing.username ||
+                existing.displayName ||
+                existing.name ||
+                authUser.displayName ||
+                authUser.email ||
+                "User",
+
+              name:
+                existing.name ||
+                existing.username ||
+                authUser.displayName ||
+                authUser.email ||
+                "User",
+
+              displayName:
+                existing.displayName ||
+                authUser.displayName ||
+                existing.username ||
+                "User",
+
+              phone:
+                existing.phone ||
+                existing.phoneNumber ||
+                authUser.phoneNumber ||
+                "",
+
+              photoURL:
+                existing.photoURL ||
+                authUser.photoURL ||
+                "",
+
+              createdAt:
+                existing.createdAt ||
+                authUser.metadata?.creationTime ||
+                null,
+
+              lastLoginAt:
+                existing.lastLoginAt ||
+                authUser.metadata?.lastSignInTime ||
+                null
+
+            }
+          );
+
+        }
+
+      } else {
 
         console.error(
-          "ADMIN AUTH USERS ERROR:",
-          authError?.message ||
-          authError
+          "ADMIN USERS AUTH ERROR:",
+          authResult.reason?.message ||
+          authResult.reason
         );
 
-        return res.status(500).json({
+      }
+
+      // ========================================================
+      // अगर दोनों Firebase sources fail हो गए
+      // ========================================================
+
+      if (
+        firestoreResult.status !== "fulfilled" &&
+        authResult.status !== "fulfilled"
+      ) {
+
+        return res.status(503).json({
 
           ok: false,
 
           success: false,
 
           error:
-            "Firebase Auth users load failed",
+            "Firebase users service timeout",
 
           details:
-            authError?.message ||
-            "Unknown Firebase Auth error"
+            "Firestore and Firebase Auth both failed or timed out"
 
         });
 
       }
 
       // ========================================================
-      // STEP 2 — FIRESTORE USERS
-      // OPTIONAL DATA ONLY
-      // ========================================================
-
-      const firestoreUsers =
-        new Map();
-
-      try {
-
-        const firestoreSnap =
-          await firestore
-            .collection("users")
-            .get();
-
-        firestoreSnap.forEach(
-          (doc) => {
-
-            firestoreUsers.set(
-              doc.id,
-              doc.data() || {}
-            );
-
-          }
-        );
-
-      } catch (firestoreError) {
-
-        // Firestore data optional hai.
-        // Auth users phir bhi show honge.
-
-        console.error(
-          "ADMIN USERS FIRESTORE WARNING:",
-          firestoreError?.message ||
-          firestoreError
-        );
-
-      }
-
-      // ========================================================
-      // STEP 3 — MERGE USERS
+      // FINAL USERS ARRAY
       // ========================================================
 
       const users = [];
 
       for (
-        const authUser
-        of authUsers
+        const [uid, data]
+        of userMap.entries()
       ) {
-
-        const uid =
-          String(
-            authUser.uid || ""
-          ).trim();
-
-        if (!uid) {
-          continue;
-        }
-
-        const data =
-          firestoreUsers.get(uid) || {};
 
         const username =
           String(
             data.username ||
             data.displayName ||
             data.name ||
-            authUser.displayName ||
-            authUser.email ||
             "User"
           ).trim();
 
         const name =
           String(
             data.name ||
-            data.username ||
-            authUser.displayName ||
-            ""
+            username ||
+            "User"
           ).trim();
 
         const email =
           String(
             data.email ||
-            authUser.email ||
             ""
           ).trim();
 
@@ -10165,7 +10309,6 @@ app.get(
           String(
             data.phone ||
             data.phoneNumber ||
-            authUser.phoneNumber ||
             ""
           ).trim();
 
@@ -10188,7 +10331,7 @@ app.get(
             ""
           ).trim();
 
-        const status =
+        const userStatus =
           String(
             data.status ||
             (
@@ -10200,23 +10343,23 @@ app.get(
             .trim()
             .toLowerCase();
 
-        // ------------------------------------------------------
+        // ======================================================
         // STATUS FILTER
-        // ------------------------------------------------------
+        // ======================================================
 
         if (
           statusFilter &&
           statusFilter !== "all" &&
-          status !== statusFilter
+          userStatus !== statusFilter
         ) {
 
           continue;
 
         }
 
-        // ------------------------------------------------------
-        // SEARCH
-        // ------------------------------------------------------
+        // ======================================================
+        // SEARCH FILTER
+        // ======================================================
 
         if (search) {
 
@@ -10245,20 +10388,17 @@ app.get(
 
         }
 
-        // ------------------------------------------------------
-        // USER OBJECT
-        // ------------------------------------------------------
+        // ======================================================
+        // USER DATA
+        // ======================================================
 
         users.push({
 
-          id:
-            uid,
+          id: uid,
 
-          userId:
-            uid,
+          userId: uid,
 
-          uid:
-            uid,
+          uid: uid,
 
           username,
 
@@ -10266,7 +10406,6 @@ app.get(
 
           displayName:
             data.displayName ||
-            authUser.displayName ||
             username,
 
           email,
@@ -10275,7 +10414,6 @@ app.get(
 
           photoURL:
             data.photoURL ||
-            authUser.photoURL ||
             "",
 
           freeFireName,
@@ -10286,7 +10424,8 @@ app.get(
             data.dob ||
             "",
 
-          status,
+          status:
+            userStatus,
 
           isBlocked:
             data.isBlocked === true,
@@ -10349,14 +10488,18 @@ app.get(
             data.referredBy ||
             "",
 
-          createdAt:
-            data.createdAt ||
-            authUser.metadata?.creationTime ||
+          lastActiveAt:
+            data.lastActiveAt ||
+            data.lastSeenAt ||
+            data.lastLoginAt ||
             null,
 
           lastLoginAt:
             data.lastLoginAt ||
-            authUser.metadata?.lastSignInTime ||
+            null,
+
+          createdAt:
+            data.createdAt ||
             null,
 
           updatedAt:
@@ -10368,29 +10511,52 @@ app.get(
       }
 
       // ========================================================
-      // STEP 4 — SORT
+      // SORT — NEWEST USER FIRST
       // ========================================================
 
-      users.sort(
-        (a, b) => {
+      const getTime = (value) => {
 
-          const aTime =
-            new Date(
-              a.createdAt || 0
-            ).getTime();
+        if (!value) {
+          return 0;
+        }
 
-          const bTime =
-            new Date(
-              b.createdAt || 0
-            ).getTime();
+        if (
+          typeof value.toMillis ===
+          "function"
+        ) {
 
-          return bTime - aTime;
+          return value.toMillis();
 
         }
+
+        if (
+          typeof value.toDate ===
+          "function"
+        ) {
+
+          return value
+            .toDate()
+            .getTime();
+
+        }
+
+        const parsed =
+          new Date(value).getTime();
+
+        return Number.isFinite(parsed)
+          ? parsed
+          : 0;
+
+      };
+
+      users.sort(
+        (a, b) =>
+          getTime(b.createdAt) -
+          getTime(a.createdAt)
       );
 
       // ========================================================
-      // STEP 5 — RESPONSE
+      // FINAL RESPONSE
       // ========================================================
 
       return res.json({
@@ -10399,10 +10565,10 @@ app.get(
 
         success: true,
 
-        total:
+        count:
           users.length,
 
-        count:
+        total:
           users.length,
 
         users
@@ -10423,8 +10589,11 @@ app.get(
         success: false,
 
         error:
+          "Users load nahi ho sake",
+
+        details:
           error?.message ||
-          "Users load nahi ho sake"
+          "Unknown error"
 
       });
 
