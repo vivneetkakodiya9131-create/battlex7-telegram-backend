@@ -5590,34 +5590,6 @@ const prizeWon =
     prizeWonRaw.toFixed(2)
   );
 
-        const userId =
-          String(
-            item?.userId || ""
-          ).trim();
-
-        const joinRequestId =
-          String(
-            item?.joinRequestId || ""
-          ).trim();
-
-        const rank =
-          Number(
-            item?.rank || 0
-          );
-
-        const kills =
-          Number(
-            item?.kills || 0
-          );
-
-        const prizeWon =
-          Number(
-            item?.prizeWon ??
-            item?.winningAmount ??
-            item?.winningsAmount ??
-            0
-          );
-
         if (
           !userId ||
           !joinRequestId ||
