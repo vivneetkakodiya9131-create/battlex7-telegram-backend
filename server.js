@@ -2882,51 +2882,206 @@ app.post(
           [requestId]
         );
 
+  // Another request/process may have changed  
+  // the PostgreSQL status after wallet credit.  
+  // Do not credit again because ledger is idempotent.  
 
-      // Another request/process may have changed
-      // the PostgreSQL status after wallet credit.
-      // Do not credit again because ledger is idempotent.
+  if (  
+    updateResult.rowCount === 0  
+  ) {  
 
-      if (
-        updateResult.rowCount === 0
-      ) {
+    const currentStatus =  
+      await pool.query(  
+        `  
+        SELECT status  
+        FROM deposit_requests  
+        WHERE id = $1  
+        LIMIT 1  
+        `,  
+        [requestId]  
+      );  
 
-        const currentStatus =
-          await pool.query(
-            `
-            SELECT status
-            FROM deposit_requests
-            WHERE id = $1
-            LIMIT 1
-            `,
-            [requestId]
+
+    if (  
+      currentStatus.rowCount &&  
+      currentStatus.rows[0].status ===  
+        "approved"  
+    ) {  
+      return res.json({  
+        ok: true,  
+        success: true,  
+        status: "approved",  
+        requestId,  
+        amount,  
+        newBalance:  
+          walletResult.newBalance,  
+        alreadyProcessed:  
+          true  
+      });  
+    }  
+
+
+    return res.status(409).json({  
+      ok: false,  
+      error:  
+        "DEPOSIT_STATUS_UPDATE_FAILED"  
+    });  
+  }  
+
+      // --------------------------------------------------------
+      // SAVE APPROVED STATUS IN FIRESTORE REQUEST MIRROR
+      // --------------------------------------------------------
+
+      if (firebaseReady && userId) {
+
+        try {
+
+          await firestore
+            .collection("depositRequests")
+            .doc(String(requestId))
+            .set(
+              {
+                status:
+                  "approved",
+
+                reviewedBy:
+                  adminUid,
+
+                reviewedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp(),
+
+                approvedAmount:
+                  amount,
+
+                walletCredited:
+                  true,
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              },
+              {
+                merge: true
+              }
+            );
+
+        } catch (firestoreError) {
+
+          console.error(
+            "DEPOSIT APPROVAL FIRESTORE UPDATE ERROR:",
+            firestoreError
           );
 
+        }
+      }
 
-        if (
-          currentStatus.rowCount &&
-          currentStatus.rows[0].status ===
-            "approved"
+      // --------------------------------------------------------
+      // USER NOTIFICATION
+      // --------------------------------------------------------
+
+      if (
+        firebaseReady &&
+        userId
+      ) {
+
+        try {
+
+          await firestore
+            .collection("users")
+            .doc(userId)
+            .collection("notifications")
+            .add({
+
+              title:
+                "Deposit Approved",
+
+              message:
+                `Your deposit of ₹${amount} has been approved and added to your wallet.`,
+
+              type:
+                "deposit",
+
+              read:
+                false,
+
+              requestId:
+                String(requestId),
+
+              amount,
+
+              status:
+                "approved",
+
+              createdAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+
+            });
+
+        } catch (
+          notificationError
         ) {
-          return res.json({
-            ok: true,
-            success: true,
-            status: "approved",
-            requestId,
+
+          console.error(
+            "DEPOSIT APPROVAL NOTIFICATION ERROR:",
+            notificationError
+          );
+
+        }
+      }
+
+      // --------------------------------------------------------
+      // ADMIN AUDIT LOG
+      // --------------------------------------------------------
+
+      try {
+
+        await x7CreateAdminAuditLog({
+
+          adminUid,
+
+          action:
+            "deposit_approved",
+
+          section:
+            "deposits",
+
+          targetId:
+            String(requestId),
+
+          details: {
+
+            requestId:
+              String(requestId),
+
+            userId,
+
             amount,
+
+            utr:
+              deposit.utr || "",
+
             newBalance:
               walletResult.newBalance,
-            alreadyProcessed:
-              true
-          });
-        }
 
+            alreadyCredited:
+              walletResult.alreadyCredited
 
-        return res.status(409).json({
-          ok: false,
-          error:
-            "DEPOSIT_STATUS_UPDATE_FAILED"
+          }
+
         });
+
+      } catch (auditError) {
+
+        console.error(
+          "DEPOSIT APPROVAL AUDIT LOG ERROR:",
+          auditError
+        );
+
       }
 
 
@@ -2937,55 +3092,53 @@ app.post(
         requestId,
         amount,
         newBalance:
-          walletResult.newBalance,
-        alreadyCredited:
-          walletResult.alreadyCredited
+          walletResult.newBalance
       });
 
 
-    } catch (error) {
+} catch (error) {  
 
-      console.error(
-        "ADMIN DEPOSIT APPROVE ERROR:",
-        error
-      );
-
-
-      if (
-        error.message ===
-        "USER_NOT_FOUND"
-      ) {
-        return res.status(404).json({
-          ok: false,
-          error:
-            "USER_NOT_FOUND"
-        });
-      }
+  console.error(  
+    "ADMIN DEPOSIT APPROVE ERROR:",  
+    error  
+  );  
 
 
-      if (
-        error.message ===
-        "INVALID_WALLET_BALANCE"
-      ) {
-        return res.status(500).json({
-          ok: false,
-          error:
-            "INVALID_WALLET_BALANCE"
-        });
-      }
+  if (  
+    error.message ===  
+    "USER_NOT_FOUND"  
+  ) {  
+    return res.status(404).json({  
+      ok: false,  
+      error:  
+        "USER_NOT_FOUND"  
+    });  
+  }  
 
 
-      return res.status(500).json({
-        ok: false,
-        error:
-          "DEPOSIT_APPROVE_FAILED"
-      });
+  if (  
+    error.message ===  
+    "INVALID_WALLET_BALANCE"  
+  ) {  
+    return res.status(500).json({  
+      ok: false,  
+      error:  
+        "INVALID_WALLET_BALANCE"  
+    });  
+  }  
 
-    }
 
-  }
+  return res.status(500).json({  
+    ok: false,  
+    error:  
+      "DEPOSIT_APPROVE_FAILED"  
+  });  
+
+}
+
+}
 );
-
+      
 // ------------------------------------------------------------
 // REJECT DEPOSIT
 // ------------------------------------------------------------
@@ -3463,9 +3616,9 @@ app.post(
             const requestRef =
               firestore
                 .collection(
-                  "withdrawalRequests"
-                )
-                .doc();
+  "withdrawRequests"
+)
+.doc();
 
             tx.update(
               userRef,
@@ -3554,9 +3707,9 @@ app.post(
       const requestRef =
         firestore
           .collection(
-            "withdrawalRequests"
-          )
-          .doc(requestId);
+  "withdrawRequests"
+)
+.doc(requestId);
 
 
       const result =
@@ -3918,16 +4071,21 @@ app.post(
       }
 
 
-      return res.json({
+            return res.json({
         ok: true,
 
-        requestId,
+        success: true,
 
         status:
           "approved",
 
+        requestId,
+
         amount:
           result.amount,
+
+        newBalance:
+          result.newBalance,
 
         message:
           "Withdrawal approved successfully"
@@ -4090,9 +4248,9 @@ app.post(
       const requestRef =
         firestore
           .collection(
-            "withdrawalRequests"
-          )
-          .doc(requestId);
+  "withdrawRequests"
+)
+.doc(requestId);
 
 
       const result =
@@ -4296,13 +4454,18 @@ app.post(
             );
 
 
-            return newBalance;
+                        return {
+              refundedAmount:
+                amount,
+
+              newBalance
+            };
 
           }
         );
 
 
-      return res.json({
+            return res.json({
         ok: true,
 
         requestId,
@@ -4311,9 +4474,7 @@ app.post(
           "rejected",
 
         refundedAmount:
-  Number(
-    request.amount || 0
-  ),
+          result.refundedAmount,
 
         message:
           "Withdrawal rejected and amount refunded successfully"
@@ -4468,9 +4629,8 @@ app.post(
 
       const requestRef =
         firestore
-          .collection("withdrawalRequests")
-          .doc(requestId);
-
+          .collection("withdrawRequests")
+.doc(requestId);
 
       const result =
         await firestore.runTransaction(
@@ -4732,7 +4892,6 @@ app.post(
           }
         );
 
-
       // ------------------------------------------------------
       // USER NOTIFICATION
       // ------------------------------------------------------
@@ -4810,7 +4969,6 @@ app.post(
         });
 
       }
-
 
       // ------------------------------------------------------
       // ADMIN AUDIT LOG
@@ -5152,10 +5310,10 @@ app.get(
       const snapshot =
         await firestore
           .collection(
-            "withdrawalRequests"
-          )
-          .where(
-            "userId",
+  "withdrawRequests"
+)
+.where(
+  "userId",
             "==",
             decoded.uid
           )
@@ -5260,6 +5418,75 @@ app.post(
         ? req.body.results.slice(0, 200)
         : [];
 
+    // ============================================================
+    // RESULT PRIZE POOL SAFETY CHECK
+    // ============================================================
+
+    if (!tournamentId || !results.length) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "tournamentId and results are required"
+      });
+    }
+
+    const tournamentRef =
+      firestore
+        .collection("tournaments")
+        .doc(tournamentId);
+
+    const tournamentSnap =
+      await tournamentRef.get();
+
+    if (!tournamentSnap.exists) {
+      return res.status(404).json({
+        ok: false,
+        error: "Tournament not found"
+      });
+    }
+
+    const tournament =
+      tournamentSnap.data() || {};
+
+    const configuredPrizePool =
+      Number(
+        tournament.prizePool || 0
+      );
+
+    const totalPrizeRequested =
+      results.reduce(
+        (sum, item) => {
+          const amount =
+            Number(
+              item?.prizeWon ??
+              item?.winningAmount ??
+              item?.winningsAmount ??
+              0
+            );
+
+          return (
+            sum +
+            (
+              Number.isFinite(amount)
+                ? Math.max(0, amount)
+                : 0
+            )
+          );
+        },
+        0
+      );
+
+    if (
+      configuredPrizePool > 0 &&
+      totalPrizeRequested > configuredPrizePool
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          `Total winning ₹${totalPrizeRequested.toFixed(2)} prize pool ₹${configuredPrizePool.toFixed(2)} se zyada nahi ho sakti`
+      });
+    }
+
     if (
       !tournamentId ||
       !results.length
@@ -5273,9 +5500,95 @@ app.post(
 
     try {
 
-      const settled = [];
+  // ============================================================
+  // RESULT DUPLICATE PLAYER PROTECTION
+  // ============================================================
 
-      for (const item of results) {
+  const settled = [];
+
+  const resultUsers = new Set();
+  const resultJoins = new Set();
+
+  for (const item of results) {
+
+    const checkUserId =
+      String(
+        item?.userId || ""
+      ).trim();
+
+    const checkJoinRequestId =
+      String(
+        item?.joinRequestId || ""
+      ).trim();
+
+    if (
+      checkUserId &&
+      resultUsers.has(checkUserId)
+    ) {
+      settled.push({
+        userId: checkUserId,
+        success: false,
+        error:
+          "Duplicate user result"
+      });
+
+      continue;
+    }
+
+    if (
+      checkJoinRequestId &&
+      resultJoins.has(checkJoinRequestId)
+    ) {
+      settled.push({
+        userId: checkUserId,
+        success: false,
+        error:
+          "Duplicate join request result"
+      });
+
+      continue;
+    }
+
+    if (checkUserId) {
+      resultUsers.add(checkUserId);
+    }
+
+    if (checkJoinRequestId) {
+      resultJoins.add(checkJoinRequestId);
+    }
+
+    // ============================================================
+    // EXISTING RESULT PROCESSING
+    // ============================================================
+
+    const userId =
+      checkUserId;
+
+    const joinRequestId =
+      checkJoinRequestId;
+
+    const rank =
+      Number(
+        item?.rank || 0
+      );
+
+    const kills =
+      Number(
+        item?.kills || 0
+      );
+
+    const prizeWonRaw =
+  Number(
+    item?.prizeWon ??
+    item?.winningAmount ??
+    item?.winningsAmount ??
+    0
+  );
+
+const prizeWon =
+  Number(
+    prizeWonRaw.toFixed(2)
+  );
 
         const userId =
           String(
@@ -5363,12 +5676,50 @@ app.post(
                 const resultSnap =
                   await tx.get(resultRef);
 
-                const tournamentSnap =
+                 const tournamentSnap =
                   await tx.get(
                     tournamentRef
-                  );
+                 );
 
-                if (!userSnap.exists) {
+              if (!tournamentSnap.exists) {
+                throw new Error(
+                  "TOURNAMENT_NOT_FOUND"
+                );
+             }
+
+             const tournamentStatus =
+               String(
+                 tournament.status || ""
+                ).trim().toUpperCase();
+
+             if (
+               tournamentStatus === "CANCELLED"
+               ) {
+                  throw new Error(
+                    "TOURNAMENT_CANCELLED"
+                  );
+               }
+
+// ============================================================
+// RESULT STATUS VALIDATION
+// ============================================================
+
+const allowedResultStatuses = [
+  "RESULT_PENDING",
+  "COMPLETED"
+];
+
+if (
+  !allowedResultStatuses.includes(
+    tournamentStatus
+  )
+) {
+  throw new Error(
+    `RESULT_NOT_ALLOWED_FOR_STATUS:${tournamentStatus || "UNKNOWN"}`
+  );
+}
+
+              if (!userSnap.exists) {
                   throw new Error(
                     "RESULT_USER_NOT_FOUND"
                   );
@@ -5383,20 +5734,44 @@ app.post(
                 const join =
                   joinSnap.data() || {};
 
-                if (
-                  String(
-                    join.userId || ""
-                  ) !== userId ||
-                  String(
-                    join.tournamentId || ""
-                  ) !== tournamentId
-                ) {
-                  throw new Error(
-                    "RESULT_JOIN_MISMATCH"
-                  );
-                }
+// ============================================================
+// RESULT JOIN VALIDATION
+// ============================================================
+
+if (
+  String(
+    join.userId || ""
+  ).trim() !== userId
+) {
+  throw new Error(
+    "RESULT_USER_JOIN_MISMATCH"
+  );
+}
+
+if (
+  String(
+    join.tournamentId || ""
+  ).trim() !== tournamentId
+) {
+  throw new Error(
+    "RESULT_TOURNAMENT_JOIN_MISMATCH"
+  );
+}
+
+// Join must belong to this tournament
+                
+if (
+  !String(
+    join.tournamentId || ""
+  ).trim()
+) {
+  throw new Error(
+    "JOIN_TOURNAMENT_ID_MISSING"
+  );
+}
 
                 // Prevent duplicate winning credit
+                
                 if (
                   resultSnap.exists &&
                   (
@@ -5448,13 +5823,17 @@ app.post(
                   );
 
                 const currentBalance =
-                  Number(
-                    user.walletBalance || 0
-                  );
+  Number(
+    user.walletBalance || 0
+  );
 
-                const newBalance =
-                  currentBalance +
-                  prizeWon;
+const newBalance =
+  Number(
+    (
+      currentBalance +
+      prizeWon
+    ).toFixed(2)
+  );
 
                 const resultData = {
                   userId,
@@ -5754,6 +6133,47 @@ app.post(
               "Failed to settle result"
           });
         }
+            }
+
+      // ============================================================
+      // MARK TOURNAMENT COMPLETED AFTER SUCCESSFUL SETTLEMENT
+      // ============================================================
+
+      const successfulSettlements =
+        settled.filter(
+          item => item.success === true
+        );
+
+      if (
+        successfulSettlements.length > 0
+      ) {
+
+        await firestore
+          .collection("tournaments")
+          .doc(tournamentId)
+          .set(
+            {
+              status: "COMPLETED",
+
+              resultsSettled: true,
+
+              resultsSettledAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp(),
+
+              updatedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp(),
+
+              updatedBy:
+                adminUser.uid
+            },
+            {
+              merge: true
+            }
+          );
       }
 
       return res.json({
@@ -7601,16 +8021,84 @@ const ROOM_UNLOCK_MINUTES = 5;
 // ADMIN CHECK
 // ------------------------------------------------------------
 
+// ============================================================
+// BATTLE X7 ARENA — CENTRAL ADMIN AUTHORIZATION
+// ============================================================
+
 async function requireAdmin(req, res) {
-  const decoded = await requireFirebaseUser(req, res);
 
-  if (!decoded) return null;
+  // Firebase must be ready
+  
+  if (!firebaseReady) {
+    res.status(503).json({
+      ok: false,
+      error: "Firebase Admin is not configured"
+    });
 
+    return null;
+  }
+
+  // Firebase ID token
+  
+  const authHeader = String(
+    req.headers.authorization || ""
+  ).trim();
+
+  if (!authHeader.startsWith("Bearer ")) {
+    res.status(401).json({
+      ok: false,
+      error: "Firebase ID token is required"
+    });
+
+    return null;
+  }
+
+  const token = authHeader
+    .substring(7)
+    .trim();
+
+  if (!token) {
+    res.status(401).json({
+      ok: false,
+      error: "Firebase ID token is required"
+    });
+
+    return null;
+  }
+
+  // Verify Firebase token
+  
+  let decoded;
+
+  try {
+
+    decoded = await admin
+      .auth()
+      .verifyIdToken(token);
+
+  } catch (error) {
+
+    console.error(
+      "ADMIN TOKEN VERIFY ERROR:",
+      error?.message || error
+    );
+
+    res.status(401).json({
+      ok: false,
+      error: "Invalid or expired Firebase ID token"
+    });
+
+    return null;
+  }
+
+  // Server Master Admin UID
+  
   const adminUid = String(
     process.env.ADMIN_UID || ""
   ).trim();
 
   if (!adminUid) {
+
     res.status(503).json({
       ok: false,
       error: "ADMIN_UID is not configured"
@@ -7619,7 +8107,50 @@ async function requireAdmin(req, res) {
     return null;
   }
 
-  if (decoded.uid !== adminUid) {
+  // ============================================================
+  // ADMIN AUTHORIZATION
+  // Master Admin = ADMIN_UID
+  // Normal Admin = users/{uid}.role == "admin"
+  // ============================================================
+
+  let isAdminByRole = false;
+
+  try {
+
+    const adminUserSnap =
+      await firestore
+        .collection("users")
+        .doc(decoded.uid)
+        .get();
+
+    if (adminUserSnap.exists) {
+
+      const adminUserData =
+        adminUserSnap.data() || {};
+
+      isAdminByRole =
+        String(
+          adminUserData.role || ""
+        ).trim().toLowerCase() === "admin";
+    }
+
+  } catch (error) {
+
+    console.error(
+      "ADMIN ROLE CHECK ERROR:",
+      error?.message || error
+    );
+
+  }
+
+  const isMasterAdmin =
+    decoded.uid === adminUid;
+
+  if (
+    !isMasterAdmin &&
+    !isAdminByRole
+  ) {
+
     res.status(403).json({
       ok: false,
       error: "Admin access required"
@@ -7628,9 +8159,9 @@ async function requireAdmin(req, res) {
     return null;
   }
 
+  // Return verified Firebase user
   return decoded;
 }
-
 // ============================================================
 // CREATE / UPDATE ROOM
 // ADMIN ONLY
@@ -14114,6 +14645,7 @@ try {
     ).toLowerCase();
 
     // Rejected/cancelled joins ko AI data mein include mat karo
+    
     if (
       requestStatus === "rejected" ||
       requestStatus === "cancelled" ||
@@ -14586,7 +15118,6 @@ try {
       );
     }
 
-
     // -----------------------------------------------
     // Understand actual problem
     // -----------------------------------------------
@@ -14605,7 +15136,6 @@ try {
       aiSupportSummary.description ||
       "User has reported a support issue through AI Arena. The support team is requested to review and assist the user.";
 
-
     // -----------------------------------------------
     // Decide screenshot or video
     // -----------------------------------------------
@@ -14616,7 +15146,6 @@ try {
         problemSummary,
         description
       );
-
 
     // -----------------------------------------------
     // Save pending ticket in Neon
@@ -18153,17 +18682,34 @@ app.post(
           .collection("tournaments")
           .doc();
 
-      const tournamentData = {
+            const tournamentData = {
 
         title,
 
         name:
           title,
 
+        game:
+          String(
+            body.game ||
+            "Free Fire MAX"
+          ).trim(),
+
+        type:
+          String(
+            body.type ||
+            body.matchType ||
+            mode
+          ).trim(),
+
         mode,
 
         category:
-          mode,
+          String(
+            body.category ||
+            body.matchCategory ||
+            mode
+          ).trim(),
 
         map,
 
@@ -18184,7 +18730,14 @@ app.post(
 
         killPoint,
 
-        status,
+        registrationDeadline:
+          body.registrationDeadline ||
+          body.registrationEnd ||
+          null,
+
+        startTime:
+          body.startTime ||
+          null,
 
         date:
           String(
@@ -18200,6 +18753,24 @@ app.post(
             ""
           ).trim(),
 
+        bannerUrl:
+          String(
+            body.bannerUrl ||
+            body.banner ||
+            ""
+          ).trim(),
+
+        rules:
+          String(
+            body.rules ||
+            ""
+          ).trim(),
+
+        status,
+
+        resultsSettled:
+          false,
+
         createdAt:
           now,
 
@@ -18207,7 +18778,7 @@ app.post(
           now,
 
         createdBy:
-          process.env.ADMIN_UID || null
+          req.user.uid
       };
 
       await tournamentRef.set(
@@ -18490,6 +19061,67 @@ app.patch(
         }
 
         updates.killPoint = value;
+      }
+
+            if (body.game !== undefined) {
+
+        updates.game =
+          String(
+            body.game || ""
+          ).trim();
+      }
+
+
+      if (body.type !== undefined) {
+
+        updates.type =
+          String(
+            body.type || ""
+          ).trim();
+      }
+
+
+      if (body.category !== undefined) {
+
+        updates.category =
+          String(
+            body.category || ""
+          ).trim();
+      }
+
+
+      if (body.bannerUrl !== undefined) {
+
+        updates.bannerUrl =
+          String(
+            body.bannerUrl || ""
+          ).trim();
+      }
+
+
+      if (body.rules !== undefined) {
+
+        updates.rules =
+          String(
+            body.rules || ""
+          ).trim();
+      }
+
+
+      if (body.startTime !== undefined) {
+
+        updates.startTime =
+          body.startTime || null;
+      }
+
+
+      if (
+        body.registrationDeadline !==
+        undefined
+      ) {
+
+        updates.registrationDeadline =
+          body.registrationDeadline || null;
       }
 
       if (
@@ -18887,7 +19519,10 @@ app.get("/admin/rooms", async (req, res) => {
 // This endpoint only loads pending/result data for Admin Panel.
 // ============================================================
 
-app.get("/admin/results", async (req, res) => {
+app.get(
+  "/admin/results",
+  requireAdmin,
+  async (req, res) => {
   const adminUser = await requireAdmin(req, res);
   if (!adminUser) return;
 
@@ -19182,6 +19817,7 @@ app.get("/admin/notifications", async (req, res) => {
     });
 
     // Load notification subcollections safely
+    
     for (const userDoc of snap.docs) {
 
       const notificationSnap =
@@ -19480,6 +20116,30 @@ app.post(
         openInNewTab:
           body.openInNewTab !== false,
 
+                type:
+          String(
+            body.type ||
+            "PROMO"
+          ).trim(),
+
+        action:
+          String(
+            body.action ||
+            "OPEN_LINK"
+          ).trim(),
+
+        destination:
+          String(
+            body.destination ||
+            ""
+          ).trim(),
+
+        clickArea:
+          String(
+            body.clickArea ||
+            "FULL_BANNER"
+          ).trim(),
+
         createdAt:
           admin.firestore
             .FieldValue
@@ -19696,6 +20356,46 @@ app.patch(
 
         updates.openInNewTab =
           body.openInNewTab !== false;
+      }
+
+            if (
+        body.type !== undefined
+      ) {
+
+        updates.type =
+          String(
+            body.type || ""
+          ).trim();
+      }
+
+      if (
+        body.action !== undefined
+      ) {
+
+        updates.action =
+          String(
+            body.action || ""
+          ).trim();
+      }
+
+      if (
+        body.destination !== undefined
+      ) {
+
+        updates.destination =
+          String(
+            body.destination || ""
+          ).trim();
+      }
+
+      if (
+        body.clickArea !== undefined
+      ) {
+
+        updates.clickArea =
+          String(
+            body.clickArea || ""
+          ).trim();
       }
 
       updates.updatedAt =
@@ -20841,6 +21541,105 @@ app.get(
         error:
           "Admin logs load nahi ho sake"
       });
+    }
+  }
+);
+
+// ============================================================
+// ADMIN AUDIT LOGS ALIAS
+// Admin Panel uses /admin/audit-logs
+// ============================================================
+
+app.get(
+  "/admin/audit-logs",
+  async (req, res) => {
+
+    const adminUser =
+      await requireMasterAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Firebase is not configured"
+      });
+    }
+
+    try {
+
+      const snap =
+        await firestore
+          .collection("adminLogs")
+          .orderBy(
+            "createdAt",
+            "desc"
+          )
+          .limit(200)
+          .get();
+
+      const logs = [];
+
+      snap.forEach(doc => {
+
+        const data =
+          doc.data() || {};
+
+        logs.push({
+
+          id:
+            doc.id,
+
+          createdAt:
+            data.createdAt ||
+            data.timestamp ||
+            null,
+
+          adminUid:
+            data.adminUid ||
+            data.uid ||
+            "",
+
+          action:
+            data.action ||
+            "",
+
+          target:
+            data.target ||
+            data.targetId ||
+            "",
+
+          result:
+            data.result ||
+            data.status ||
+            "success"
+
+        });
+
+      });
+
+      return res.json({
+        ok: true,
+        logs
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN AUDIT LOGS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Admin audit logs load nahi ho sake"
+      });
+
     }
   }
 );
