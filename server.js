@@ -9993,6 +9993,470 @@ app.get(
 );
 
 // ============================================================
+// BATTLE X7 ARENA — ADMIN USERS LIST
+// FIREBASE AUTH + FIRESTORE MERGED USERS
+// ============================================================
+
+app.get(
+  "/admin/users",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const search = String(
+        req.query.q ||
+        req.query.search ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const statusFilter = String(
+        req.query.status ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const userMap = new Map();
+
+      // ========================================================
+      // 1. FIRESTORE USERS
+      // ========================================================
+
+      const firestoreSnap =
+        await firestore
+          .collection("users")
+          .get();
+
+      firestoreSnap.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        userMap.set(
+          doc.id,
+          {
+            id: doc.id,
+            userId: doc.id,
+            ...data
+          }
+        );
+
+      });
+
+      // ========================================================
+      // 2. FIREBASE AUTH USERS
+      // ========================================================
+
+      try {
+
+        const authResult =
+          await admin
+            .auth()
+            .listUsers(1000);
+
+        for (
+          const authUser
+          of (authResult.users || [])
+        ) {
+
+          const uid =
+            String(
+              authUser.uid || ""
+            ).trim();
+
+          if (!uid) {
+            continue;
+          }
+
+          const existing =
+            userMap.get(uid) || {};
+
+          userMap.set(
+            uid,
+            {
+
+              ...existing,
+
+              id: uid,
+
+              userId: uid,
+
+              email:
+                existing.email ||
+                authUser.email ||
+                "",
+
+              username:
+                existing.username ||
+                existing.displayName ||
+                existing.name ||
+                authUser.displayName ||
+                "",
+
+              name:
+                existing.name ||
+                existing.username ||
+                authUser.displayName ||
+                "",
+
+              displayName:
+                existing.displayName ||
+                authUser.displayName ||
+                "",
+
+              phone:
+                existing.phone ||
+                authUser.phoneNumber ||
+                "",
+
+              photoURL:
+                existing.photoURL ||
+                authUser.photoURL ||
+                "",
+
+              createdAt:
+                existing.createdAt ||
+                authUser.metadata?.creationTime ||
+                null,
+
+              lastLoginAt:
+                existing.lastLoginAt ||
+                authUser.metadata?.lastSignInTime ||
+                null
+
+            }
+          );
+
+        }
+
+      } catch (authError) {
+
+        console.error(
+          "ADMIN AUTH USERS ERROR:",
+          authError
+        );
+
+      }
+
+      // ========================================================
+      // 3. BUILD FINAL USERS LIST
+      // ========================================================
+
+      const users = [];
+
+      for (
+        const [uid, data]
+        of userMap.entries()
+      ) {
+
+        const username =
+          String(
+            data.username ||
+            data.displayName ||
+            data.name ||
+            ""
+          ).trim();
+
+        const name =
+          String(
+            data.name ||
+            username ||
+            ""
+          ).trim();
+
+        const email =
+          String(
+            data.email ||
+            ""
+          ).trim();
+
+        const freeFireName =
+          String(
+            data.freeFireName ||
+            ""
+          ).trim();
+
+        const freeFireUid =
+          String(
+            data.freeFireUid ||
+            data.freefireUid ||
+            ""
+          ).trim();
+
+        const phone =
+          String(
+            data.phone ||
+            data.phoneNumber ||
+            ""
+          ).trim();
+
+        const referralCode =
+          String(
+            data.referralCode ||
+            ""
+          ).trim();
+
+        const userStatus =
+          String(
+            data.status ||
+            (
+              data.isBlocked === true
+                ? "blocked"
+                : "active"
+            )
+          )
+            .trim()
+            .toLowerCase();
+
+        // STATUS FILTER
+        if (
+          statusFilter &&
+          statusFilter !== "all" &&
+          userStatus !== statusFilter
+        ) {
+          continue;
+        }
+
+        // SEARCH FILTER
+        if (search) {
+
+          const searchable = [
+
+            uid,
+            username,
+            name,
+            email,
+            freeFireName,
+            freeFireUid,
+            phone,
+            referralCode
+
+          ]
+            .join(" ")
+            .toLowerCase();
+
+          if (
+            !searchable.includes(search)
+          ) {
+            continue;
+          }
+
+        }
+
+        users.push({
+
+          id: uid,
+
+          userId: uid,
+
+          username,
+
+          name,
+
+          displayName:
+            data.displayName ||
+            username,
+
+          email,
+
+          phone,
+
+          photoURL:
+            data.photoURL ||
+            "",
+
+          freeFireName,
+
+          freeFireUid,
+
+          dob:
+            data.dob ||
+            "",
+
+          status:
+            userStatus,
+
+          isBlocked:
+            data.isBlocked === true,
+
+          role:
+            data.role ||
+            "user",
+
+          walletBalance:
+            Number(
+              data.walletBalance ??
+              0
+            ),
+
+          earnings:
+            Number(
+              data.earnings ??
+              data.totalEarnings ??
+              0
+            ),
+
+          totalEarnings:
+            Number(
+              data.totalEarnings ??
+              data.earnings ??
+              0
+            ),
+
+          wins:
+            Number(
+              data.wins ??
+              data.totalWins ??
+              0
+            ),
+
+          totalWins:
+            Number(
+              data.totalWins ??
+              data.wins ??
+              0
+            ),
+
+          kills:
+            Number(
+              data.kills ??
+              data.totalKills ??
+              0
+            ),
+
+          totalKills:
+            Number(
+              data.totalKills ??
+              data.kills ??
+              0
+            ),
+
+          referralCode,
+
+          referredBy:
+            data.referredBy ||
+            "",
+
+          lastActiveAt:
+            data.lastActiveAt ||
+            data.lastSeenAt ||
+            data.lastLoginAt ||
+            null,
+
+          lastLoginAt:
+            data.lastLoginAt ||
+            null,
+
+          createdAt:
+            data.createdAt ||
+            null,
+
+          updatedAt:
+            data.updatedAt ||
+            null
+
+        });
+
+      }
+
+      // ========================================================
+      // 4. SORT NEWEST FIRST
+      // ========================================================
+
+      const getTime = (value) => {
+
+        if (!value) {
+          return 0;
+        }
+
+        if (
+          typeof value.toMillis ===
+          "function"
+        ) {
+          return value.toMillis();
+        }
+
+        if (
+          typeof value.toDate ===
+          "function"
+        ) {
+          return value
+            .toDate()
+            .getTime();
+        }
+
+        const parsed =
+          new Date(value).getTime();
+
+        return Number.isFinite(parsed)
+          ? parsed
+          : 0;
+      };
+
+      users.sort(
+        (a, b) =>
+          getTime(b.createdAt) -
+          getTime(a.createdAt)
+      );
+
+      // ========================================================
+      // 5. FINAL RESPONSE
+      // ========================================================
+
+      return res.json({
+
+        ok: true,
+
+        success: true,
+
+        count:
+          users.length,
+
+        total:
+          users.length,
+
+        users
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USERS LIST ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        success: false,
+
+        error:
+          "Users load nahi ho sake",
+
+        details:
+          error?.message ||
+          "Unknown error"
+
+      });
+
+    }
+
+  }
+);
+
+// ============================================================
 // BATTLE X7 ARENA — ADMIN DASHBOARD OVERVIEW
 // ADVANCED LIVE CONTROL CENTER
 // Real Firestore data only
@@ -16780,555 +17244,7 @@ app.get("/admin/finance/summary", requireAdmin, async (req, res) => {
     });
   }
 });
-
-// ============================================================
-// BATTLE X7 ARENA — ADMIN USERS LIST
-// FIRESTORE + FIREBASE AUTH MERGED USERS
-// Search + Status Filter
-// ============================================================
-
-app.get(
-  "/admin/users",
-  requireAdmin,
-  async (req, res) => {
-
-    try {
-
-      if (!firebaseReady) {
-
-        return res.status(503).json({
-          ok: false,
-          error:
-            "Firebase is not configured"
-        });
-
-      }
-
-
-      const search =
-        String(
-          req.query.q ||
-          req.query.search ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
-
-
-      const statusFilter =
-        String(
-          req.query.status ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
-
-      // ------------------------------------------------------
-      // FIRESTORE USERS
-      // ------------------------------------------------------
-
-      const firestoreSnap =
-        await firestore
-          .collection("users")
-          .get();
-
-
-      const userMap =
-        new Map();
-
-
-      firestoreSnap.forEach(
-        (doc) => {
-
-          const data =
-            doc.data() || {};
-
-          userMap.set(
-            doc.id,
-            {
-              id:
-                doc.id,
-
-              userId:
-                doc.id,
-
-              ...data
-            }
-          );
-
-        }
-      );
-
-      // ------------------------------------------------------
-      // FIREBASE AUTH USERS
-      // ------------------------------------------------------
-
-      try {
-
-        let authResult =
-          await admin
-            .auth()
-            .listUsers(1000);
-
-
-        const authUsers =
-          authResult.users || [];
-
-
-        for (
-          const authUser
-          of authUsers
-        ) {
-
-          const uid =
-            String(
-              authUser.uid || ""
-            ).trim();
-
-
-          if (!uid) {
-            continue;
-          }
-
-
-          const existing =
-            userMap.get(uid) || {};
-
-
-          userMap.set(
-            uid,
-            {
-
-              ...existing,
-
-              id:
-                uid,
-
-              userId:
-                uid,
-
-              email:
-                existing.email ||
-                authUser.email ||
-                "",
-
-              username:
-                existing.username ||
-                existing.displayName ||
-                existing.name ||
-                authUser.displayName ||
-                "",
-
-              name:
-                existing.name ||
-                existing.username ||
-                authUser.displayName ||
-                "",
-
-              displayName:
-                existing.displayName ||
-                authUser.displayName ||
-                "",
-
-              phone:
-                existing.phone ||
-                authUser.phoneNumber ||
-                "",
-
-              photoURL:
-                existing.photoURL ||
-                authUser.photoURL ||
-                "",
-
-              createdAt:
-                existing.createdAt ||
-                authUser.metadata?.creationTime ||
-                null,
-
-              lastLoginAt:
-                existing.lastLoginAt ||
-                authUser.metadata?.lastSignInTime ||
-                null
-
-            }
-          );
-
-        }
-
-      } catch (
-        authListError
-      ) {
-
-        console.error(
-          "ADMIN AUTH USERS LIST ERROR:",
-          authListError
-        );
-
-      }
-
-      // ------------------------------------------------------
-      // BUILD FINAL USERS ARRAY
-      // ------------------------------------------------------
-
-      const users = [];
-
-
-      for (
-        const [
-          uid,
-          data
-        ]
-        of userMap.entries()
-      ) {
-
-        const username =
-          String(
-            data.username ||
-            data.displayName ||
-            data.name ||
-            ""
-          ).trim();
-
-
-        const name =
-          String(
-            data.name ||
-            username ||
-            ""
-          ).trim();
-
-
-        const email =
-          String(
-            data.email ||
-            ""
-          ).trim();
-
-
-        const freeFireName =
-          String(
-            data.freeFireName ||
-            ""
-          ).trim();
-
-
-        const freeFireUid =
-          String(
-            data.freeFireUid ||
-            data.freefireUid ||
-            ""
-          ).trim();
-
-
-        const phone =
-          String(
-            data.phone ||
-            data.phoneNumber ||
-            ""
-          ).trim();
-
-
-        const referralCode =
-          String(
-            data.referralCode ||
-            ""
-          ).trim();
-
-
-        const userStatus =
-          String(
-            data.status ||
-            (
-              data.isBlocked === true
-                ? "blocked"
-                : "active"
-            )
-          )
-            .trim()
-            .toLowerCase();
-
-        // ----------------------------------------------------
-        // STATUS FILTER
-        // ----------------------------------------------------
-
-        if (
-          statusFilter &&
-          statusFilter !== "all" &&
-          userStatus !==
-            statusFilter
-        ) {
-
-          continue;
-
-        }
-
-        // ----------------------------------------------------
-        // SEARCH FILTER
-        // ----------------------------------------------------
-
-        if (search) {
-
-          const searchable = [
-
-            uid,
-
-            username,
-
-            name,
-
-            email,
-
-            freeFireName,
-
-            freeFireUid,
-
-            phone,
-
-            referralCode
-
-          ]
-            .join(" ")
-            .toLowerCase();
-
-
-          if (
-            !searchable.includes(
-              search
-            )
-          ) {
-
-            continue;
-
-          }
-
-        }
-
-
-        users.push({
-
-          id:
-            uid,
-
-          userId:
-            uid,
-
-          username,
-
-          name,
-
-          displayName:
-            data.displayName ||
-            username,
-
-          email,
-
-          phone,
-
-          photoURL:
-            data.photoURL ||
-            "",
-
-          freeFireName,
-
-          freeFireUid,
-
-          dob:
-            data.dob ||
-            "",
-
-          status:
-            userStatus,
-
-          isBlocked:
-            data.isBlocked === true,
-
-          role:
-            data.role ||
-            "user",
-
-          walletBalance:
-            Number(
-              data.walletBalance ??
-              0
-            ),
-
-          earnings:
-            Number(
-              data.earnings ??
-              data.totalEarnings ??
-              0
-            ),
-
-          totalEarnings:
-            Number(
-              data.totalEarnings ??
-              data.earnings ??
-              0
-            ),
-
-          wins:
-            Number(
-              data.wins ??
-              data.totalWins ??
-              0
-            ),
-
-          totalWins:
-            Number(
-              data.totalWins ??
-              data.wins ??
-              0
-            ),
-
-          kills:
-            Number(
-              data.kills ??
-              data.totalKills ??
-              0
-            ),
-
-          totalKills:
-            Number(
-              data.totalKills ??
-              data.kills ??
-              0
-            ),
-
-          referralCode,
-
-          referredBy:
-            data.referredBy ||
-            "",
-
-          lastActiveAt:
-            data.lastActiveAt ||
-            data.lastSeenAt ||
-            data.lastLoginAt ||
-            null,
-
-          lastLoginAt:
-            data.lastLoginAt ||
-            null,
-
-          createdAt:
-            data.createdAt ||
-            null,
-
-          updatedAt:
-            data.updatedAt ||
-            null
-
-        });
-
-      }
-
-      // ------------------------------------------------------
-      // NEWEST USERS FIRST
-      // ------------------------------------------------------
-
-      const getTime =
-        (value) => {
-
-          if (!value) {
-            return 0;
-          }
-
-
-          if (
-            typeof value.toMillis ===
-            "function"
-          ) {
-
-            return value.toMillis();
-
-          }
-
-
-          if (
-            typeof value.toDate ===
-            "function"
-          ) {
-
-            return value
-              .toDate()
-              .getTime();
-
-          }
-
-
-          const parsed =
-            new Date(value)
-              .getTime();
-
-
-          return Number.isFinite(
-            parsed
-          )
-            ? parsed
-            : 0;
-
-        };
-
-
-      users.sort(
-        (a, b) =>
-          getTime(
-            b.createdAt
-          ) -
-          getTime(
-            a.createdAt
-          )
-      );
-
-      // ------------------------------------------------------
-      // FINAL RESPONSE
-      // ------------------------------------------------------
-
-      return res.json({
-
-        ok: true,
-
-        success: true,
-
-        count:
-          users.length,
-
-        total:
-          users.length,
-
-        users
-
-      });
-
-
-    } catch (error) {
-
-      console.error(
-        "ADMIN USERS LIST ERROR:",
-        error
-      );
-
-
-      return res.status(500).json({
-
-        ok: false,
-
-        success: false,
-
-        error:
-          "Users load nahi ho sake",
-
-        details:
-          error?.message ||
-          "Unknown error"
-
-      });
-
-    }
-
-  }
-);
-            
+        
 // ------------------------------------------------------------
 // ADMIN — USER UPDATE
 // Safe fields only
