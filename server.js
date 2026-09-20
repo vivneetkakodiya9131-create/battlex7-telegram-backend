@@ -9994,7 +9994,7 @@ app.get(
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN USERS LIST
-// FIREBASE AUTH + FIRESTORE MERGED USERS
+// FINAL — FIREBASE AUTH + FIRESTORE
 // ============================================================
 
 app.get(
@@ -10005,57 +10005,37 @@ app.get(
     try {
 
       if (!firebaseReady) {
+
         return res.status(503).json({
           ok: false,
-          error: "Firebase is not configured"
+          success: false,
+          error: "Firebase Admin is not configured"
         });
+
       }
 
-      const search = String(
-        req.query.q ||
-        req.query.search ||
-        ""
-      )
-        .trim()
-        .toLowerCase();
+      const search =
+        String(
+          req.query.q ||
+          req.query.search ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
 
-      const statusFilter = String(
-        req.query.status ||
-        ""
-      )
-        .trim()
-        .toLowerCase();
-
-      const userMap = new Map();
-
-      // ========================================================
-      // 1. FIRESTORE USERS
-      // ========================================================
-
-      const firestoreSnap =
-        await firestore
-          .collection("users")
-          .get();
-
-      firestoreSnap.forEach((doc) => {
-
-        const data =
-          doc.data() || {};
-
-        userMap.set(
-          doc.id,
-          {
-            id: doc.id,
-            userId: doc.id,
-            ...data
-          }
-        );
-
-      });
+      const statusFilter =
+        String(
+          req.query.status ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
 
       // ========================================================
-      // 2. FIREBASE AUTH USERS
+      // STEP 1 — FIREBASE AUTH USERS
       // ========================================================
+
+      let authUsers = [];
 
       try {
 
@@ -10064,119 +10044,128 @@ app.get(
             .auth()
             .listUsers(1000);
 
-        for (
-          const authUser
-          of (authResult.users || [])
-        ) {
-
-          const uid =
-            String(
-              authUser.uid || ""
-            ).trim();
-
-          if (!uid) {
-            continue;
-          }
-
-          const existing =
-            userMap.get(uid) || {};
-
-          userMap.set(
-            uid,
-            {
-
-              ...existing,
-
-              id: uid,
-
-              userId: uid,
-
-              email:
-                existing.email ||
-                authUser.email ||
-                "",
-
-              username:
-                existing.username ||
-                existing.displayName ||
-                existing.name ||
-                authUser.displayName ||
-                "",
-
-              name:
-                existing.name ||
-                existing.username ||
-                authUser.displayName ||
-                "",
-
-              displayName:
-                existing.displayName ||
-                authUser.displayName ||
-                "",
-
-              phone:
-                existing.phone ||
-                authUser.phoneNumber ||
-                "",
-
-              photoURL:
-                existing.photoURL ||
-                authUser.photoURL ||
-                "",
-
-              createdAt:
-                existing.createdAt ||
-                authUser.metadata?.creationTime ||
-                null,
-
-              lastLoginAt:
-                existing.lastLoginAt ||
-                authUser.metadata?.lastSignInTime ||
-                null
-
-            }
-          );
-
-        }
+        authUsers =
+          Array.isArray(authResult.users)
+            ? authResult.users
+            : [];
 
       } catch (authError) {
 
         console.error(
           "ADMIN AUTH USERS ERROR:",
+          authError?.message ||
           authError
+        );
+
+        return res.status(500).json({
+
+          ok: false,
+
+          success: false,
+
+          error:
+            "Firebase Auth users load failed",
+
+          details:
+            authError?.message ||
+            "Unknown Firebase Auth error"
+
+        });
+
+      }
+
+      // ========================================================
+      // STEP 2 — FIRESTORE USERS
+      // OPTIONAL DATA ONLY
+      // ========================================================
+
+      const firestoreUsers =
+        new Map();
+
+      try {
+
+        const firestoreSnap =
+          await firestore
+            .collection("users")
+            .get();
+
+        firestoreSnap.forEach(
+          (doc) => {
+
+            firestoreUsers.set(
+              doc.id,
+              doc.data() || {}
+            );
+
+          }
+        );
+
+      } catch (firestoreError) {
+
+        // Firestore data optional hai.
+        // Auth users phir bhi show honge.
+
+        console.error(
+          "ADMIN USERS FIRESTORE WARNING:",
+          firestoreError?.message ||
+          firestoreError
         );
 
       }
 
       // ========================================================
-      // 3. BUILD FINAL USERS LIST
+      // STEP 3 — MERGE USERS
       // ========================================================
 
       const users = [];
 
       for (
-        const [uid, data]
-        of userMap.entries()
+        const authUser
+        of authUsers
       ) {
+
+        const uid =
+          String(
+            authUser.uid || ""
+          ).trim();
+
+        if (!uid) {
+          continue;
+        }
+
+        const data =
+          firestoreUsers.get(uid) || {};
 
         const username =
           String(
             data.username ||
             data.displayName ||
             data.name ||
-            ""
+            authUser.displayName ||
+            authUser.email ||
+            "User"
           ).trim();
 
         const name =
           String(
             data.name ||
-            username ||
+            data.username ||
+            authUser.displayName ||
             ""
           ).trim();
 
         const email =
           String(
             data.email ||
+            authUser.email ||
+            ""
+          ).trim();
+
+        const phone =
+          String(
+            data.phone ||
+            data.phoneNumber ||
+            authUser.phoneNumber ||
             ""
           ).trim();
 
@@ -10193,20 +10182,13 @@ app.get(
             ""
           ).trim();
 
-        const phone =
-          String(
-            data.phone ||
-            data.phoneNumber ||
-            ""
-          ).trim();
-
         const referralCode =
           String(
             data.referralCode ||
             ""
           ).trim();
 
-        const userStatus =
+        const status =
           String(
             data.status ||
             (
@@ -10218,16 +10200,24 @@ app.get(
             .trim()
             .toLowerCase();
 
+        // ------------------------------------------------------
         // STATUS FILTER
+        // ------------------------------------------------------
+
         if (
           statusFilter &&
           statusFilter !== "all" &&
-          userStatus !== statusFilter
+          status !== statusFilter
         ) {
+
           continue;
+
         }
 
-        // SEARCH FILTER
+        // ------------------------------------------------------
+        // SEARCH
+        // ------------------------------------------------------
+
         if (search) {
 
           const searchable = [
@@ -10236,9 +10226,9 @@ app.get(
             username,
             name,
             email,
+            phone,
             freeFireName,
             freeFireUid,
-            phone,
             referralCode
 
           ]
@@ -10248,16 +10238,27 @@ app.get(
           if (
             !searchable.includes(search)
           ) {
+
             continue;
+
           }
 
         }
 
+        // ------------------------------------------------------
+        // USER OBJECT
+        // ------------------------------------------------------
+
         users.push({
 
-          id: uid,
+          id:
+            uid,
 
-          userId: uid,
+          userId:
+            uid,
+
+          uid:
+            uid,
 
           username,
 
@@ -10265,6 +10266,7 @@ app.get(
 
           displayName:
             data.displayName ||
+            authUser.displayName ||
             username,
 
           email,
@@ -10273,6 +10275,7 @@ app.get(
 
           photoURL:
             data.photoURL ||
+            authUser.photoURL ||
             "",
 
           freeFireName,
@@ -10283,8 +10286,7 @@ app.get(
             data.dob ||
             "",
 
-          status:
-            userStatus,
+          status,
 
           isBlocked:
             data.isBlocked === true,
@@ -10347,18 +10349,14 @@ app.get(
             data.referredBy ||
             "",
 
-          lastActiveAt:
-            data.lastActiveAt ||
-            data.lastSeenAt ||
-            data.lastLoginAt ||
+          createdAt:
+            data.createdAt ||
+            authUser.metadata?.creationTime ||
             null,
 
           lastLoginAt:
             data.lastLoginAt ||
-            null,
-
-          createdAt:
-            data.createdAt ||
+            authUser.metadata?.lastSignInTime ||
             null,
 
           updatedAt:
@@ -10370,47 +10368,29 @@ app.get(
       }
 
       // ========================================================
-      // 4. SORT NEWEST FIRST
+      // STEP 4 — SORT
       // ========================================================
 
-      const getTime = (value) => {
-
-        if (!value) {
-          return 0;
-        }
-
-        if (
-          typeof value.toMillis ===
-          "function"
-        ) {
-          return value.toMillis();
-        }
-
-        if (
-          typeof value.toDate ===
-          "function"
-        ) {
-          return value
-            .toDate()
-            .getTime();
-        }
-
-        const parsed =
-          new Date(value).getTime();
-
-        return Number.isFinite(parsed)
-          ? parsed
-          : 0;
-      };
-
       users.sort(
-        (a, b) =>
-          getTime(b.createdAt) -
-          getTime(a.createdAt)
+        (a, b) => {
+
+          const aTime =
+            new Date(
+              a.createdAt || 0
+            ).getTime();
+
+          const bTime =
+            new Date(
+              b.createdAt || 0
+            ).getTime();
+
+          return bTime - aTime;
+
+        }
       );
 
       // ========================================================
-      // 5. FINAL RESPONSE
+      // STEP 5 — RESPONSE
       // ========================================================
 
       return res.json({
@@ -10419,10 +10399,10 @@ app.get(
 
         success: true,
 
-        count:
+        total:
           users.length,
 
-        total:
+        count:
           users.length,
 
         users
@@ -10443,11 +10423,8 @@ app.get(
         success: false,
 
         error:
-          "Users load nahi ho sake",
-
-        details:
           error?.message ||
-          "Unknown error"
+          "Users load nahi ho sake"
 
       });
 
