@@ -9994,8 +9994,7 @@ app.get(
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN USERS LIST
-// FIRESTORE PRIMARY USERS API
-// Firebase Auth listUsers() intentionally not required
+// FAST + PAGINATED FIRESTORE USERS API
 // ============================================================
 
 app.get(
@@ -10003,7 +10002,13 @@ app.get(
   requireAdmin,
   async (req, res) => {
 
+    const startedAt = Date.now();
+
     try {
+
+      // --------------------------------------------------------
+      // FIREBASE CHECK
+      // --------------------------------------------------------
 
       if (!firebaseReady || !firestore) {
 
@@ -10015,9 +10020,9 @@ app.get(
 
       }
 
-      // ========================================================
-      // SEARCH
-      // ========================================================
+      // --------------------------------------------------------
+      // QUERY PARAMETERS
+      // --------------------------------------------------------
 
       const search = String(
         req.query.q ||
@@ -10027,10 +10032,6 @@ app.get(
         .trim()
         .toLowerCase();
 
-      // ========================================================
-      // STATUS FILTER
-      // ========================================================
-
       const statusFilter = String(
         req.query.status ||
         ""
@@ -10038,43 +10039,118 @@ app.get(
         .trim()
         .toLowerCase();
 
-      // ========================================================
-      // LOAD USERS DIRECTLY FROM FIRESTORE
+      const limitRaw = Number(
+        req.query.limit || 50
+      );
+
+      const pageLimit = Math.max(
+        10,
+        Math.min(
+          100,
+          Number.isFinite(limitRaw)
+            ? Math.floor(limitRaw)
+            : 50
+        )
+      );
+
+      const cursor = String(
+        req.query.cursor ||
+        ""
+      ).trim();
+
+      // --------------------------------------------------------
+      // USERS QUERY
       //
       // IMPORTANT:
-      // Firebase Auth listUsers(1000) is NOT required here.
-      // All application users are stored in:
-      //
-      // users/{uid}
-      //
-      // This prevents /admin/users from waiting for Firebase Auth.
-      // ========================================================
+      // Do NOT use .get() without limit.
+      // That was causing /admin/users to become slow.
+      // --------------------------------------------------------
 
-      const snapshot = await firestore
-        .collection("users")
-        .get();
+      let usersQuery =
+        firestore
+          .collection("users")
+          .orderBy(
+            admin.firestore.FieldPath.documentId(),
+            "desc"
+          )
+          .limit(pageLimit + 1);
 
-      // ========================================================
-      // FINAL USERS ARRAY
-      // ========================================================
+      // --------------------------------------------------------
+      // STATUS FILTER
+      // --------------------------------------------------------
+      //
+      // Status filtering is applied after reading the small page.
+      // This keeps the query simple and avoids unnecessary indexes.
+      //
+      // --------------------------------------------------------
+
+      // --------------------------------------------------------
+      // PAGINATION CURSOR
+      // --------------------------------------------------------
+
+      if (cursor) {
+
+        usersQuery =
+          usersQuery.startAfter(cursor);
+
+      }
+
+      const snapshot =
+        await usersQuery.get();
+
+      // --------------------------------------------------------
+      // HAS MORE
+      // --------------------------------------------------------
+
+      const hasMore =
+        snapshot.docs.length >
+        pageLimit;
+
+      const docs =
+        hasMore
+          ? snapshot.docs.slice(
+              0,
+              pageLimit
+            )
+          : snapshot.docs;
+
+      // --------------------------------------------------------
+      // NEXT CURSOR
+      // --------------------------------------------------------
+
+      const lastDoc =
+        docs.length > 0
+          ? docs[docs.length - 1]
+          : null;
+
+      const nextCursor =
+        hasMore && lastDoc
+          ? lastDoc.id
+          : null;
+
+      // --------------------------------------------------------
+      // USERS ARRAY
+      // --------------------------------------------------------
 
       const users = [];
 
-      snapshot.forEach((doc) => {
+      for (const doc of docs) {
 
         const data =
           doc.data() || {};
 
         const uid =
-          String(doc.id || "").trim();
+          String(
+            doc.id || ""
+          ).trim();
 
         if (!uid) {
-          return;
+          continue;
         }
 
-        // ======================================================
+        // ------------------------------------------------------
         // USERNAME
-        // ======================================================
+        // ------------------------------------------------------
 
         const username =
           String(
@@ -10084,9 +10160,9 @@ app.get(
             "User"
           ).trim();
 
-        // ======================================================
+        // ------------------------------------------------------
         // NAME
-        // ======================================================
+        // ------------------------------------------------------
 
         const name =
           String(
@@ -10095,9 +10171,9 @@ app.get(
             "User"
           ).trim();
 
-        // ======================================================
+        // ------------------------------------------------------
         // EMAIL
-        // ======================================================
+        // ------------------------------------------------------
 
         const email =
           String(
@@ -10105,9 +10181,9 @@ app.get(
             ""
           ).trim();
 
-        // ======================================================
+        // ------------------------------------------------------
         // PHONE
-        // ======================================================
+        // ------------------------------------------------------
 
         const phone =
           String(
@@ -10116,9 +10192,9 @@ app.get(
             ""
           ).trim();
 
-        // ======================================================
+        // ------------------------------------------------------
         // FREE FIRE
-        // ======================================================
+        // ------------------------------------------------------
 
         const freeFireName =
           String(
@@ -10133,9 +10209,9 @@ app.get(
             ""
           ).trim();
 
-        // ======================================================
+        // ------------------------------------------------------
         // REFERRAL
-        // ======================================================
+        // ------------------------------------------------------
 
         const referralCode =
           String(
@@ -10143,9 +10219,9 @@ app.get(
             ""
           ).trim();
 
-        // ======================================================
+        // ------------------------------------------------------
         // STATUS
-        // ======================================================
+        // ------------------------------------------------------
 
         const userStatus =
           String(
@@ -10159,23 +10235,21 @@ app.get(
             .trim()
             .toLowerCase();
 
-        // ======================================================
+        // ------------------------------------------------------
         // STATUS FILTER
-        // ======================================================
+        // ------------------------------------------------------
 
         if (
           statusFilter &&
           statusFilter !== "all" &&
           userStatus !== statusFilter
         ) {
-
-          return;
-
+          continue;
         }
 
-        // ======================================================
+        // ------------------------------------------------------
         // SEARCH FILTER
-        // ======================================================
+        // ------------------------------------------------------
 
         if (search) {
 
@@ -10195,18 +10269,17 @@ app.get(
             .toLowerCase();
 
           if (
-            !searchable.includes(search)
+            !searchable.includes(
+              search
+            )
           ) {
-
-            return;
-
+            continue;
           }
-
         }
 
-        // ======================================================
-        // USER DATA
-        // ======================================================
+        // ------------------------------------------------------
+        // USER OBJECT
+        // ------------------------------------------------------
 
         users.push({
 
@@ -10325,59 +10398,11 @@ app.get(
 
         });
 
-      });
+      }
 
-      // ========================================================
-      // SORT — NEWEST USER FIRST
-      // ========================================================
-
-      const getTime = (value) => {
-
-        if (!value) {
-          return 0;
-        }
-
-        // Firestore Timestamp
-        if (
-          typeof value.toMillis ===
-          "function"
-        ) {
-
-          return value.toMillis();
-
-        }
-
-        // Firestore Timestamp fallback
-        if (
-          typeof value.toDate ===
-          "function"
-        ) {
-
-          return value
-            .toDate()
-            .getTime();
-
-        }
-
-        // String / Date
-        const parsed =
-          new Date(value).getTime();
-
-        return Number.isFinite(parsed)
-          ? parsed
-          : 0;
-
-      };
-
-      users.sort(
-        (a, b) =>
-          getTime(b.createdAt) -
-          getTime(a.createdAt)
-      );
-
-      // ========================================================
-      // FINAL RESPONSE
-      // ========================================================
+      // --------------------------------------------------------
+      // RESPONSE
+      // --------------------------------------------------------
 
       return res.json({
 
@@ -10388,10 +10413,31 @@ app.get(
         count:
           users.length,
 
+        // Important:
+        // This is the current page count.
+        // It is NOT the complete collection count.
         total:
           users.length,
 
-        users
+        hasMore,
+
+        nextCursor,
+
+        users,
+
+        meta: {
+
+          limit:
+            pageLimit,
+
+          returned:
+            users.length,
+
+          responseTimeMs:
+            Date.now() -
+            startedAt
+
+        }
 
       });
 
