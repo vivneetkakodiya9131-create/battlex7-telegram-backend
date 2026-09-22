@@ -9994,8 +9994,8 @@ app.get(
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN USERS LIST
-// FINAL STABLE USERS API
-// FIREBASE AUTH + FIRESTORE
+// FIRESTORE PRIMARY USERS API
+// Firebase Auth listUsers() intentionally not required
 // ============================================================
 
 app.get(
@@ -10006,12 +10006,18 @@ app.get(
     try {
 
       if (!firebaseReady || !firestore) {
+
         return res.status(503).json({
           ok: false,
           success: false,
           error: "Firebase Admin is not ready"
         });
+
       }
+
+      // ========================================================
+      // SEARCH
+      // ========================================================
 
       const search = String(
         req.query.q ||
@@ -10021,6 +10027,10 @@ app.get(
         .trim()
         .toLowerCase();
 
+      // ========================================================
+      // STATUS FILTER
+      // ========================================================
+
       const statusFilter = String(
         req.query.status ||
         ""
@@ -10029,249 +10039,20 @@ app.get(
         .toLowerCase();
 
       // ========================================================
-      // TIMEOUT HELPER
-      // किसी Firebase service के slow होने पर पूरा API hang नहीं होगा
+      // LOAD USERS DIRECTLY FROM FIRESTORE
+      //
+      // IMPORTANT:
+      // Firebase Auth listUsers(1000) is NOT required here.
+      // All application users are stored in:
+      //
+      // users/{uid}
+      //
+      // This prevents /admin/users from waiting for Firebase Auth.
       // ========================================================
 
-      const withTimeout = (
-        promise,
-        ms,
-        label
-      ) => {
-
-        let timer;
-
-        const timeoutPromise =
-          new Promise((_, reject) => {
-
-            timer = setTimeout(() => {
-
-              reject(
-                new Error(
-                  label + " timeout"
-                )
-              );
-
-            }, ms);
-
-          });
-
-        return Promise.race([
-          promise,
-          timeoutPromise
-        ]).finally(() => {
-
-          clearTimeout(timer);
-
-        });
-
-      };
-
-      // ========================================================
-      // FIRESTORE + FIREBASE AUTH
-      // दोनों एक साथ चलेंगे
-      // ========================================================
-
-      const firestorePromise =
-        withTimeout(
-          firestore
-            .collection("users")
-            .get(),
-          5000,
-          "Firestore users"
-        );
-
-      const authPromise =
-        withTimeout(
-          admin
-            .auth()
-            .listUsers(1000),
-          5000,
-          "Firebase Auth users"
-        );
-
-      const results =
-        await Promise.allSettled([
-          firestorePromise,
-          authPromise
-        ]);
-
-      const firestoreResult =
-        results[0];
-
-      const authResult =
-        results[1];
-
-      // ========================================================
-      // USERS MAP
-      // ========================================================
-
-      const userMap =
-        new Map();
-
-      // ========================================================
-      // FIRESTORE USERS
-      // ========================================================
-
-      if (
-        firestoreResult.status ===
-        "fulfilled"
-      ) {
-
-        const snapshot =
-          firestoreResult.value;
-
-        snapshot.forEach((doc) => {
-
-          const data =
-            doc.data() || {};
-
-          userMap.set(
-            String(doc.id),
-            {
-              id: String(doc.id),
-              userId: String(doc.id),
-              ...data
-            }
-          );
-
-        });
-
-      } else {
-
-        console.error(
-          "ADMIN USERS FIRESTORE ERROR:",
-          firestoreResult.reason?.message ||
-          firestoreResult.reason
-        );
-
-      }
-
-      // ========================================================
-      // FIREBASE AUTH USERS
-      // ========================================================
-
-      if (
-        authResult.status ===
-        "fulfilled"
-      ) {
-
-        const authUsers =
-          authResult.value?.users || [];
-
-        for (
-          const authUser
-          of authUsers
-        ) {
-
-          const uid =
-            String(
-              authUser.uid || ""
-            ).trim();
-
-          if (!uid) {
-            continue;
-          }
-
-          const existing =
-            userMap.get(uid) || {};
-
-          userMap.set(
-            uid,
-            {
-
-              ...existing,
-
-              id: uid,
-
-              userId: uid,
-
-              email:
-                existing.email ||
-                authUser.email ||
-                "",
-
-              username:
-                existing.username ||
-                existing.displayName ||
-                existing.name ||
-                authUser.displayName ||
-                authUser.email ||
-                "User",
-
-              name:
-                existing.name ||
-                existing.username ||
-                authUser.displayName ||
-                authUser.email ||
-                "User",
-
-              displayName:
-                existing.displayName ||
-                authUser.displayName ||
-                existing.username ||
-                "User",
-
-              phone:
-                existing.phone ||
-                existing.phoneNumber ||
-                authUser.phoneNumber ||
-                "",
-
-              photoURL:
-                existing.photoURL ||
-                authUser.photoURL ||
-                "",
-
-              createdAt:
-                existing.createdAt ||
-                authUser.metadata?.creationTime ||
-                null,
-
-              lastLoginAt:
-                existing.lastLoginAt ||
-                authUser.metadata?.lastSignInTime ||
-                null
-
-            }
-          );
-
-        }
-
-      } else {
-
-        console.error(
-          "ADMIN USERS AUTH ERROR:",
-          authResult.reason?.message ||
-          authResult.reason
-        );
-
-      }
-
-      // ========================================================
-      // अगर दोनों Firebase sources fail हो गए
-      // ========================================================
-
-      if (
-        firestoreResult.status !== "fulfilled" &&
-        authResult.status !== "fulfilled"
-      ) {
-
-        return res.status(503).json({
-
-          ok: false,
-
-          success: false,
-
-          error:
-            "Firebase users service timeout",
-
-          details:
-            "Firestore and Firebase Auth both failed or timed out"
-
-        });
-
-      }
+      const snapshot = await firestore
+        .collection("users")
+        .get();
 
       // ========================================================
       // FINAL USERS ARRAY
@@ -10279,10 +10060,21 @@ app.get(
 
       const users = [];
 
-      for (
-        const [uid, data]
-        of userMap.entries()
-      ) {
+      snapshot.forEach((doc) => {
+
+        const data =
+          doc.data() || {};
+
+        const uid =
+          String(doc.id || "").trim();
+
+        if (!uid) {
+          return;
+        }
+
+        // ======================================================
+        // USERNAME
+        // ======================================================
 
         const username =
           String(
@@ -10292,6 +10084,10 @@ app.get(
             "User"
           ).trim();
 
+        // ======================================================
+        // NAME
+        // ======================================================
+
         const name =
           String(
             data.name ||
@@ -10299,11 +10095,19 @@ app.get(
             "User"
           ).trim();
 
+        // ======================================================
+        // EMAIL
+        // ======================================================
+
         const email =
           String(
             data.email ||
             ""
           ).trim();
+
+        // ======================================================
+        // PHONE
+        // ======================================================
 
         const phone =
           String(
@@ -10311,6 +10115,10 @@ app.get(
             data.phoneNumber ||
             ""
           ).trim();
+
+        // ======================================================
+        // FREE FIRE
+        // ======================================================
 
         const freeFireName =
           String(
@@ -10325,11 +10133,19 @@ app.get(
             ""
           ).trim();
 
+        // ======================================================
+        // REFERRAL
+        // ======================================================
+
         const referralCode =
           String(
             data.referralCode ||
             ""
           ).trim();
+
+        // ======================================================
+        // STATUS
+        // ======================================================
 
         const userStatus =
           String(
@@ -10353,7 +10169,7 @@ app.get(
           userStatus !== statusFilter
         ) {
 
-          continue;
+          return;
 
         }
 
@@ -10382,7 +10198,7 @@ app.get(
             !searchable.includes(search)
           ) {
 
-            continue;
+            return;
 
           }
 
@@ -10414,6 +10230,7 @@ app.get(
 
           photoURL:
             data.photoURL ||
+            data.photoUrl ||
             "",
 
           freeFireName,
@@ -10508,7 +10325,7 @@ app.get(
 
         });
 
-      }
+      });
 
       // ========================================================
       // SORT — NEWEST USER FIRST
@@ -10520,6 +10337,7 @@ app.get(
           return 0;
         }
 
+        // Firestore Timestamp
         if (
           typeof value.toMillis ===
           "function"
@@ -10529,6 +10347,7 @@ app.get(
 
         }
 
+        // Firestore Timestamp fallback
         if (
           typeof value.toDate ===
           "function"
@@ -10540,6 +10359,7 @@ app.get(
 
         }
 
+        // String / Date
         const parsed =
           new Date(value).getTime();
 
