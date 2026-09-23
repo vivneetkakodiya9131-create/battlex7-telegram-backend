@@ -15111,6 +15111,7 @@ if (
 }
     
     // Optional conversation history from the app
+    
     const history = Array.isArray(req.body?.history)
       ? req.body.history.slice(-10)
       : [];
@@ -15137,13 +15138,26 @@ const normalizedMessage = message.toLowerCase();
 let currentMobile = mobile;
     
 const explicitTicketRequest =
-  /\b(ticket|support ticket|complaint|complain)\b/.test(
-    normalizedMessage
-  ) &&
-  /(create|open|raise|make|bana|banado|bana do|kar do|kardo|register|submit|file)/.test(
-    normalizedMessage
+  (
+    /\b(ticket|support ticket|complaint|complain|problem|issue|problem aa rahi|problem ho rahi|kaam nahi kar|work nahi|not working|error|bug|notification|payment|withdrawal|match|tournament|wallet)\b/i.test(
+      normalizedMessage
+    )
+    &&
+    !/\b(kya hai|kya hota hai|what is|how to|how does|information|info|details|batao|bataye)\b/i.test(
+      normalizedMessage
+    )
+  )
+  ||
+  (
+    /\b(ticket|support ticket|complaint|complain)\b/i.test(
+      normalizedMessage
+    )
+    &&
+    /(create|open|raise|make|bana|banado|bana do|kar do|kardo|register|submit|file|send)/i.test(
+      normalizedMessage
+    )
   );
-
+    
 const previousAssistantOfferedTicket =
   safeHistory.some((item) =>
     item.role === "assistant" &&
@@ -15666,6 +15680,7 @@ OR
     ];
 
     // Representative video frames AI ko bhejo
+    
     for (const frame of videoFrames) {
       videoContent.push({
         type: "input_image",
@@ -16250,7 +16265,7 @@ Important rules:
 1. Never invent tournament, match, wallet, earning, withdrawal, referral or leaderboard data.
 2. Always use the real backend data provided in the current context.
 3. Never claim that a payment, withdrawal, tournament result, earning or reward was changed, approved or credited unless the backend data explicitly confirms it.
-4. The AI Arena is READ-ONLY. It cannot directly modify wallet balance, withdrawals, tournament results, rewards, referrals or account data.
+4. The AI Arena cannot directly modify wallet balance, withdrawals, tournament results, rewards, referrals or account data. However, the AI Arena CAN create and submit support tickets through the backend support-ticket system when the user reports a support issue.
 5. Be concise, friendly and helpful.
 6. Reply in the same language/style as the user whenever possible.
 7. You are a female AI assistant.
