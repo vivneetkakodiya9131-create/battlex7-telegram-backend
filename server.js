@@ -15322,66 +15322,185 @@ try {
     // Decide screenshot or video
     // -----------------------------------------------
 
-    const proofType =
-      getProofType(
-        "AI ARENA",
-        problemSummary,
-        description
-      );
+    const aiArenaProof =
+  getAIArenaProofRequirement(
+    problemSummary,
+    description
+  );
+
+const proofType =
+  aiArenaProof.proofType;
 
     // -----------------------------------------------
     // Save pending ticket in Neon
     // -----------------------------------------------
 
-    await pool.query(
-      `
-      INSERT INTO ai_arena_pending_tickets (
-  user_id,
-  conversation_id,
-  email,
-  username,
-  free_fire_uid,
-  free_fire_name,
-  problem_summary,
-  description,
-  proof_type,
-  status
-)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'proof_required')
-      `,
-      [
-  decoded.uid,
-  conversationId,
-  currentEmail || "",
-  currentUsername || "",
-  currentFreeFireUid || "",
-  currentFreeFireName || "",
-  problemSummary,
-  description,
-  proofType
-]
-    );
+    const proofRequired =
+  aiArenaProof.required === true;
+
+const hasImageProof =
+  Array.isArray(images) &&
+  images.length > 0;
+
+const hasVideoProof =
+  typeof video === "string" &&
+  video.trim() !== "";
 
 
-    const proofMessage =
-      proofType === "video"
-        ? "🎥 Is problem ke liye VIDEO proof required hai."
-        : "📸 Is problem ke liye SCREENSHOT proof required hai.";
+// ------------------------------------------------
+// VIDEO PROOF IS REQUIRED
+// ------------------------------------------------
+
+if (
+  proofRequired &&
+  proofType === "video" &&
+  !hasVideoProof
+) {
+  await pool.query(
+    `
+    INSERT INTO ai_arena_pending_tickets (
+      user_id,
+      conversation_id,
+      email,
+      username,
+      free_fire_uid,
+      free_fire_name,
+      problem_summary,
+      description,
+      proof_type,
+      status
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'proof_required')
+    `,
+    [
+      decoded.uid,
+      conversationId,
+      currentEmail || "",
+      currentUsername || "",
+      currentFreeFireUid || "",
+      currentFreeFireName || "",
+      problemSummary,
+      description,
+      "video"
+    ]
+  );
+
+  return res.json({
+    ok: true,
+    ticketState: "proof_required",
+    proofType: "video",
+    reply:
+      `Samajh gaya bhai.\n\n` +
+      `📋 Problem: ${problemSummary}\n\n` +
+      `🎥 Is issue ke liye VIDEO proof required hai.\n\n` +
+      `Please video yahin AI Arena mein bhejo.`
+  });
+}
+
+// ------------------------------------------------
+// OPTIONAL IMAGE PROOF ALREADY ATTACHED
+// ------------------------------------------------
+
+if (
+  !proofRequired &&
+  proofType === "image" &&
+  hasImageProof
+) {
+  await pool.query(
+    `
+    INSERT INTO ai_arena_pending_tickets (
+      user_id,
+      conversation_id,
+      email,
+      username,
+      free_fire_uid,
+      free_fire_name,
+      problem_summary,
+      description,
+      proof_type,
+      status,
+      proof_data,
+      proof_mime_type
+    )
+    VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,
+      'confirmation_required',
+      $10,$11
+    )
+    `,
+    [
+      decoded.uid,
+      conversationId,
+      currentEmail || "",
+      currentUsername || "",
+      currentFreeFireUid || "",
+      currentFreeFireName || "",
+      problemSummary,
+      description,
+      "image",
+      images[0],
+      "image/jpeg"
+    ]
+  );
+
+  return res.json({
+    ok: true,
+    ticketState: "confirmation_required",
+    proofType: "image",
+    reply:
+      `✅ Screenshot receive ho gaya bhai.\n\n` +
+      `📋 Problem: ${problemSummary}\n\n` +
+      `Kya main ye support ticket create karke support team ko bhej du?\n\n` +
+      `👉 Haan / Yes`
+  });
+}
 
 
-    return res.json({
-      ok: true,
-      ticketState: "proof_required",
-      proofType,
-      reply:
-        `Samajh gaya bhai. Main complaint register karne ke liye ready hoon.\n\n` +
-        `📋 Problem: ${problemSummary}\n\n` +
-        `${proofMessage}\n\n` +
-        `Please proof yahin AI Arena mein bhejo.\n\n` +
-        `⚠️ Proof milne ke baad main aapse final confirmation loonga.`
-    });
-  }
+// ------------------------------------------------
+// NO PROOF REQUIRED
+// ------------------------------------------------
 
+await pool.query(
+  `
+  INSERT INTO ai_arena_pending_tickets (
+    user_id,
+    conversation_id,
+    email,
+    username,
+    free_fire_uid,
+    free_fire_name,
+    problem_summary,
+    description,
+    proof_type,
+    status
+  )
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'confirmation_required')
+  `,
+  [
+    decoded.uid,
+    conversationId,
+    currentEmail || "",
+    currentUsername || "",
+    currentFreeFireUid || "",
+    currentFreeFireName || "",
+    problemSummary,
+    description,
+    proofType || ""
+  ]
+);
+
+return res.json({
+  ok: true,
+  ticketState: "confirmation_required",
+  proofType: proofType || "",
+  reply:
+    `Samajh gaya bhai.\n\n` +
+    `📋 Problem: ${problemSummary}\n\n` +
+    `Screenshot/video ki zarurat nahi hai.\n\n` +
+    `Kya main ye support ticket create karke support team ko bhej du?\n\n` +
+    `👉 Haan / Yes`
+});
+    
   // ========================================================
   // USER SENDS SCREENSHOT / VIDEO
   // ========================================================
@@ -15398,6 +15517,7 @@ try {
       pendingTicket.proof_type;
 
     // Wrong proof type
+    
     if (
       expectedType === "image" &&
       attachmentType !== "image"
@@ -15580,6 +15700,7 @@ if (attachmentType === "video" && video) {
       : [];
 
     // Video ke representative frames available nahi hain
+    
     if (!videoFrames.length) {
       return res.json({
         ok: true,
@@ -15742,6 +15863,7 @@ OR
     }
 
     // Video proof rejected
+    
     if (!videoCheck.valid) {
 
       return res.json({
@@ -15769,6 +15891,7 @@ OR
     }
 
     // Video proof accepted
+    
     console.log(
       "✅ AI video proof verification accepted:",
       videoCheck.reason || "Relevant video proof"
@@ -15838,6 +15961,38 @@ OR
         `👉 Haan / Yes`
     });
   }
+
+// ========================================================
+// FINAL CONFIRMATION - CANCEL
+// ========================================================
+
+const cancelsTicket =
+  /^(nahi|nahin|no|cancel|cancel kar do|cancel karo|rehne do|mat karo|don't|dont)\b/i.test(
+    message
+  );
+
+if (
+  pendingTicket &&
+  pendingTicket.status === "confirmation_required" &&
+  cancelsTicket
+) {
+  await pool.query(
+    `
+    DELETE FROM ai_arena_pending_tickets
+    WHERE id = $1
+    `,
+    [pendingTicket.id]
+  );
+
+  return res.json({
+    ok: true,
+    ticketState: "cancelled",
+    reply:
+      `❌ Theek hai bhai, support ticket cancel kar diya gaya.\n\n` +
+      `Aapki complaint se related koi ticket create nahi kiya gaya.\n\n` +
+      `Aap normal AI Arena chat continue kar sakte ho.`
+  });
+}
 
   // ========================================================
   // FINAL CONFIRMATION
@@ -15910,10 +16065,14 @@ OR
       "━━━━━━━━━━━━━━━━━━\n" +
 
       (
+  pendingTicket.proof_data
+    ? (
         proofType === "video"
           ? "🎥 Proof: VIDEO ATTACHED"
           : "📸 Proof: SCREENSHOT ATTACHED"
-      ) +
+      )
+    : "📎 Proof: NOT PROVIDED / NOT REQUIRED"
+)+
 
       "\n\n" +
 
@@ -16265,7 +16424,7 @@ Important rules:
 1. Never invent tournament, match, wallet, earning, withdrawal, referral or leaderboard data.
 2. Always use the real backend data provided in the current context.
 3. Never claim that a payment, withdrawal, tournament result, earning or reward was changed, approved or credited unless the backend data explicitly confirms it.
-4. The AI Arena cannot directly modify wallet balance, withdrawals, tournament results, rewards, referrals or account data. However, the AI Arena CAN create and submit support tickets through the backend support-ticket system when the user reports a support issue.
+4. The AI Arena cannot directly modify wallet balance, withdrawals, tournament results, rewards, referrals or account data. However, the AI Arena CAN create and submit support tickets through the backend support-ticket system when the user reports a genuine support issue and confirms ticket creation.
 5. Be concise, friendly and helpful.
 6. Reply in the same language/style as the user whenever possible.
 7. You are a female AI assistant.
