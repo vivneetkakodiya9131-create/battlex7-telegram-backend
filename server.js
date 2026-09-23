@@ -320,333 +320,792 @@ app.post(
 
 // ============================================================
 // BATTLE X7 ARENA — TOURNAMENT JOIN / ENTRY
-// Server-authoritative wallet deduction + atomic join lock
+// SERVER-AUTHORITATIVE + ATOMIC + LEDGER SAFE
 // ============================================================
 
 app.post(
   "/tournament/join",
   async (req, res) => {
+
     if (!firebaseReady) {
+
       return res.status(503).json({
         ok: false,
         success: false,
-        message: "Firebase server is not configured"
+        error:
+          "FIREBASE_NOT_CONFIGURED"
       });
+
     }
 
-    const decoded = await requireFirebaseUser(req, res);
+    // --------------------------------------------------------
+    // USER AUTHENTICATION
+    // --------------------------------------------------------
+
+    const decoded =
+      await requireFirebaseUser(
+        req,
+        res
+      );
+
     if (!decoded) return;
 
-    const tournamentId = String(req.body?.tournamentId || "").trim();
+    const userId =
+      String(
+        decoded.uid || ""
+      ).trim();
+
+    if (!userId) {
+
+      return res.status(401).json({
+        ok: false,
+        success: false,
+        error:
+          "UNAUTHORIZED"
+      });
+
+    }
+
+    // --------------------------------------------------------
+    // TOURNAMENT ID
+    // --------------------------------------------------------
+
+    const tournamentId =
+      String(
+        req.body?.tournamentId || ""
+      ).trim();
 
     if (!tournamentId) {
+
       return res.status(400).json({
         ok: false,
         success: false,
-        message: "Tournament ID is required"
+        error:
+          "TOURNAMENT_ID_REQUIRED"
       });
+
     }
 
     try {
-      const result = await firestore.runTransaction(async (tx) => {
 
-        const userRef =
-          firestore.collection("users").doc(decoded.uid);
+      const result =
+        await firestore.runTransaction(
+          async (tx) => {
 
-        const tournamentRef =
-          firestore.collection("tournaments").doc(tournamentId);
+            // ------------------------------------------------
+            // REFERENCES
+            // ------------------------------------------------
 
-        const joinLockRef =
-          userRef
-            .collection("tournamentJoins")
-            .doc(tournamentId);
+            const userRef =
+              firestore
+                .collection("users")
+                .doc(userId);
 
-        const joinRequestRef =
-          firestore.collection("joinRequests").doc();
+            const tournamentRef =
+              firestore
+                .collection("tournaments")
+                .doc(tournamentId);
 
-        const [userSnap, tournamentSnap, lockSnap] =
-          await Promise.all([
-            tx.get(userRef),
-            tx.get(tournamentRef),
-            tx.get(joinLockRef)
-          ]);
+            const joinLockRef =
+              userRef
+                .collection("tournamentJoins")
+                .doc(tournamentId);
 
-        if (!userSnap.exists) {
-          throw new Error("USER_NOT_FOUND");
-        }
+            const joinRequestRef =
+              firestore
+                .collection("joinRequests")
+                .doc();
 
-        if (!tournamentSnap.exists) {
-          throw new Error("TOURNAMENT_NOT_FOUND");
-        }
+            // ------------------------------------------------
+            // READ ALL REQUIRED DOCUMENTS
+            // ------------------------------------------------
 
-        const user = userSnap.data() || {};
-        const tournament = tournamentSnap.data() || {};
+            const [
+              userSnap,
+              tournamentSnap,
+              lockSnap
+            ] =
+              await Promise.all([
 
-        const lockData =
-          lockSnap.exists ? (lockSnap.data() || {}) : {};
+                tx.get(userRef),
 
-        const lockStatus =
-          String(lockData.status || "")
-            .trim()
-            .toLowerCase();
+                tx.get(
+                  tournamentRef
+                ),
 
-        if (
-          lockSnap.exists &&
-          !["rejected", "cancelled", "canceled"]
-            .includes(lockStatus)
-        ) {
-          throw new Error("ALREADY_JOINED");
-        }
+                tx.get(
+                  joinLockRef
+                )
 
-        const rawStatus =
-          String(tournament.status || "upcoming")
-            .trim()
-            .toLowerCase();
+              ]);
 
-        if (
-          [
-            "complete",
-            "completed",
-            "finished",
-            "closed",
-            "cancelled",
-            "canceled"
-          ].includes(rawStatus)
-        ) {
-          throw new Error("TOURNAMENT_CLOSED");
-        }
+            // ------------------------------------------------
+            // USER CHECK
+            // ------------------------------------------------
 
-        if (
-          ["live", "started", "running"]
-            .includes(rawStatus)
-        ) {
-          throw new Error("TOURNAMENT_LIVE");
-        }
+            if (!userSnap.exists) {
 
-        const entryFee =
-          Number(
-            tournament.entryFee ??
-            tournament.entry ??
-            0
-          );
+              throw new Error(
+                "USER_NOT_FOUND"
+              );
 
-        if (
-          !Number.isFinite(entryFee) ||
-          entryFee < 0
-        ) {
-          throw new Error("INVALID_ENTRY_FEE");
-        }
+            }
 
-        const slots =
-          Number(
-            tournament.slots ??
-            tournament.totalSlots ??
-            tournament.maxPlayers ??
-            0
-          );
+            // ------------------------------------------------
+            // TOURNAMENT CHECK
+            // ------------------------------------------------
 
-        const filled =
-          Number(
-            tournament.filledSlots ??
-            tournament.joined ??
-            tournament.joinedPlayers ??
-            0
-          );
+            if (!tournamentSnap.exists) {
 
-        if (slots > 0 && filled >= slots) {
-          throw new Error("TOURNAMENT_FULL");
-        }
+              throw new Error(
+                "TOURNAMENT_NOT_FOUND"
+              );
 
-        const balance =
-          Number(user.walletBalance || 0);
+            }
 
-        if (entryFee > balance) {
-          throw new Error("INSUFFICIENT_BALANCE");
-        }
+            const user =
+              userSnap.data() || {};
 
-        const now =
-          admin.firestore.FieldValue.serverTimestamp();
+            const tournament =
+              tournamentSnap.data() || {};
 
-        const newBalance =
-          balance - entryFee;
+            // ------------------------------------------------
+            // TOURNAMENT STATUS
+            // ONLY REGISTRATION_OPEN CAN BE JOINED
+            // ------------------------------------------------
 
-        if (entryFee > 0) {
-          tx.update(userRef, {
-            walletBalance: newBalance,
-            updatedAt: now
+            const status =
+              String(
+                tournament.status ||
+                "DRAFT"
+              )
+                .trim()
+                .toUpperCase();
+
+            if (
+              status !==
+              "REGISTRATION_OPEN"
+            ) {
+
+              if (
+                status ===
+                "LIVE"
+              ) {
+
+                throw new Error(
+                  "TOURNAMENT_LIVE"
+                );
+
+              }
+
+              if (
+                status ===
+                "COMPLETED" ||
+                status ===
+                "CANCELLED"
+              ) {
+
+                throw new Error(
+                  "TOURNAMENT_CLOSED"
+                );
+
+              }
+
+              throw new Error(
+                "REGISTRATION_NOT_OPEN"
+              );
+
+            }
+
+            // ------------------------------------------------
+            // EXISTING JOIN LOCK
+            // ------------------------------------------------
+
+            const lockData =
+              lockSnap.exists
+                ? (
+                    lockSnap.data() ||
+                    {}
+                  )
+                : {};
+
+            const lockStatus =
+              String(
+                lockData.status || ""
+              )
+                .trim()
+                .toLowerCase();
+
+            // Only rejected/cancelled joins
+            // are allowed to try again.
+
+            if (
+              lockSnap.exists &&
+              ![
+                "rejected",
+                "cancelled",
+                "canceled"
+              ].includes(
+                lockStatus
+              )
+            ) {
+
+              throw new Error(
+                "ALREADY_JOINED"
+              );
+
+            }
+
+            // ------------------------------------------------
+            // ENTRY FEE
+            // ------------------------------------------------
+
+            const entryFee =
+              Number(
+                tournament.entryFee ??
+                tournament.entry ??
+                0
+              );
+
+            if (
+              !Number.isFinite(
+                entryFee
+              ) ||
+              entryFee < 0
+            ) {
+
+              throw new Error(
+                "INVALID_ENTRY_FEE"
+              );
+
+            }
+
+            const normalizedEntryFee =
+              Number(
+                entryFee.toFixed(2)
+              );
+
+            // ------------------------------------------------
+            // SLOT VALIDATION
+            // ------------------------------------------------
+
+            const slots =
+              Number(
+                tournament.slots ??
+                tournament.totalSlots ??
+                tournament.maxPlayers ??
+                0
+              );
+
+            const filled =
+              Number(
+                tournament.filledSlots ??
+                tournament.joinedPlayers ??
+                tournament.joined ??
+                0
+              );
+
+            if (
+              !Number.isFinite(
+                filled
+              ) ||
+              filled < 0
+            ) {
+
+              throw new Error(
+                "INVALID_TOURNAMENT_SLOTS"
+              );
+
+            }
+
+            if (
+              slots > 0 &&
+              filled >= slots
+            ) {
+
+              throw new Error(
+                "TOURNAMENT_FULL"
+              );
+
+            }
+
+            // ------------------------------------------------
+            // WALLET BALANCE
+            // ------------------------------------------------
+
+            const balance =
+              Number(
+                user.walletBalance ??
+                0
+              );
+
+            if (
+              !Number.isFinite(
+                balance
+              ) ||
+              balance < 0
+            ) {
+
+              throw new Error(
+                "INVALID_WALLET_BALANCE"
+              );
+
+            }
+
+            if (
+              normalizedEntryFee >
+              balance
+            ) {
+
+              throw new Error(
+                "INSUFFICIENT_BALANCE"
+              );
+
+            }
+
+            const newBalance =
+              Number(
+                (
+                  balance -
+                  normalizedEntryFee
+                ).toFixed(2)
+              );
+
+            const now =
+              admin.firestore
+                .FieldValue
+                .serverTimestamp();
+
+            // ------------------------------------------------
+            // JOIN REQUEST
+            // ------------------------------------------------
+
+            tx.set(
+              joinRequestRef,
+              {
+
+                userId,
+
+                tournamentId,
+
+                tournamentTitle:
+                  String(
+                    tournament.title ||
+                    tournament.name ||
+                    ""
+                  ),
+
+                category:
+                  String(
+                    tournament.category ||
+                    tournament.matchCategory ||
+                    tournament.type ||
+                    tournament.mode ||
+                    ""
+                  ),
+
+                mode:
+                  String(
+                    tournament.mode ||
+                    tournament.category ||
+                    tournament.type ||
+                    ""
+                  ),
+
+                entryFee:
+                  normalizedEntryFee,
+
+                status:
+                  normalizedEntryFee > 0
+                    ? "paid"
+                    : "joined",
+
+                paymentVerified:
+                  normalizedEntryFee > 0,
+
+                paymentStatus:
+                  normalizedEntryFee > 0
+                    ? "paid"
+                    : "free",
+
+                tournamentStatus:
+                  "REGISTRATION_OPEN",
+
+                createdAt:
+                  now,
+
+                joinedAt:
+                  now,
+
+                updatedAt:
+                  now
+
+              }
+            );
+
+            // ------------------------------------------------
+            // ATOMIC JOIN LOCK
+            // ------------------------------------------------
+
+            tx.set(
+              joinLockRef,
+              {
+
+                userId,
+
+                tournamentId,
+
+                joinRequestId:
+                  joinRequestRef.id,
+
+                status:
+                  normalizedEntryFee > 0
+                    ? "paid"
+                    : "joined",
+
+                entryFee:
+                  normalizedEntryFee,
+
+                createdAt:
+                  now,
+
+                updatedAt:
+                  now
+
+              },
+              {
+                merge: true
+              }
+            );
+
+            // ------------------------------------------------
+            // WALLET DEBIT
+            // ------------------------------------------------
+
+            if (
+              normalizedEntryFee > 0
+            ) {
+
+              tx.update(
+                userRef,
+                {
+
+                  walletBalance:
+                    newBalance,
+
+                  updatedAt:
+                    now
+
+                }
+              );
+
+              // ----------------------------------------------
+              // UNIQUE LEDGER ID PER JOIN REQUEST
+              // ----------------------------------------------
+
+              const ledgerTransactionId =
+                `tournament_entry_${joinRequestRef.id}`;
+
+              addWalletLedgerEntry(
+                tx,
+                {
+
+                  userId,
+
+                  transactionId:
+                    ledgerTransactionId,
+
+                  type:
+                    "tournament_entry",
+
+                  direction:
+                    "debit",
+
+                  amount:
+                    normalizedEntryFee,
+
+                  previousBalance:
+                    balance,
+
+                  newBalance,
+
+                  status:
+                    "completed",
+
+                  referenceId:
+                    joinRequestRef.id,
+
+                  description:
+                    String(
+                      tournament.title ||
+                      tournament.name ||
+                      tournamentId
+                    ),
+
+                  metadata: {
+
+                    tournamentId,
+
+                    joinRequestId:
+                      joinRequestRef.id,
+
+                    entryFee:
+                      normalizedEntryFee,
+
+                    category:
+                      String(
+                        tournament.category ||
+                        tournament.matchCategory ||
+                        tournament.type ||
+                        ""
+                      )
+
+                  }
+
+                }
+              );
+
+            }
+
+            // ------------------------------------------------
+            // UPDATE TOURNAMENT SLOT COUNT
+            // ------------------------------------------------
+
+            const newFilledSlots =
+              filled + 1;
+
+            tx.update(
+              tournamentRef,
+              {
+
+                filledSlots:
+                  newFilledSlots,
+
+                joinedPlayers:
+                  newFilledSlots,
+
+                updatedAt:
+                  now
+
+              }
+            );
+
+            // ------------------------------------------------
+            // RETURN RESULT
+            // ------------------------------------------------
+
+            return {
+
+              joinRequestId:
+                joinRequestRef.id,
+
+              tournamentId,
+
+              userId,
+
+              entryFee:
+                normalizedEntryFee,
+
+              previousBalance:
+                balance,
+
+              newBalance,
+
+              filledSlots:
+                newFilledSlots,
+
+              slots
+
+            };
+
+          }
+        );
+
+      // ------------------------------------------------------
+      // USER NOTIFICATION
+      // ------------------------------------------------------
+
+      try {
+
+        await firestore
+          .collection("users")
+          .doc(userId)
+          .collection("notifications")
+          .add({
+
+            title:
+              "Tournament Joined",
+
+            message:
+              result.entryFee > 0
+                ? `You successfully joined the tournament. Entry fee ₹${result.entryFee.toFixed(2)} was deducted from your wallet.`
+                : "You successfully joined the free tournament.",
+
+            type:
+              "tournament",
+
+            tournamentId:
+              result.tournamentId,
+
+            joinRequestId:
+              result.joinRequestId,
+
+            amount:
+              result.entryFee,
+
+            status:
+              "joined",
+
+            read:
+              false,
+
+            createdAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp()
+
           });
-        }
 
-        tx.set(joinRequestRef, {
-          userId: decoded.uid,
-          tournamentId,
-          tournamentTitle:
-            String(
-              tournament.title ||
-              tournament.name ||
-              ""
-            ),
-          category:
-            String(
-              tournament.category ||
-              tournament.matchCategory ||
-              tournament.type ||
-              ""
-            ),
-          entryFee,
-          status:
-            entryFee > 0
-              ? "paid"
-              : "joined",
-          paymentVerified:
-            entryFee > 0,
-          paymentStatus:
-            entryFee > 0
-              ? "paid"
-              : "free",
-          createdAt: now,
-          updatedAt: now
-        });
+      } catch (
+        notificationError
+      ) {
 
-        tx.set(joinLockRef, {
-          userId: decoded.uid,
-          tournamentId,
-          joinRequestId: joinRequestRef.id,
-          status:
-            entryFee > 0
-              ? "paid"
-              : "joined",
-          entryFee,
-          createdAt: now,
-          updatedAt: now
-        });
+        console.error(
+          "TOURNAMENT JOIN NOTIFICATION ERROR:",
+          notificationError
+        );
 
-if (entryFee > 0) {
-
-  // ----------------------------------------------------------
-  // UNIVERSAL WALLET LEDGER — TOURNAMENT ENTRY
-  // ----------------------------------------------------------
-
-  const ledgerTransactionId =
-    `tournament_entry_${decoded.uid}_${tournamentId}`;
-
-  addWalletLedgerEntry(
-    tx,
-    {
-      userId: decoded.uid,
-
-      transactionId:
-        ledgerTransactionId,
-
-      type:
-        "tournament_entry",
-
-      direction:
-        "debit",
-
-      amount:
-        entryFee,
-
-      previousBalance:
-        balance,
-
-      newBalance:
-        newBalance,
-
-      status:
-        "completed",
-
-      referenceId:
-        joinRequestRef.id,
-
-      description:
-        String(
-          tournament.title ||
-          tournament.name ||
-          tournamentId
-        ),
-
-      metadata: {
-        tournamentId,
-        joinRequestId:
-          joinRequestRef.id,
-        entryFee
       }
-    }
-  );
-}
 
-        tx.update(tournamentRef, {
-          filledSlots:
-            Math.max(0, filled) + 1,
+      // ------------------------------------------------------
+      // SUCCESS
+      // ------------------------------------------------------
 
-          joinedPlayers:
-            Math.max(0, filled) + 1,
+      return res.status(201).json({
 
-          updatedAt: now
-        });
-
-        return {
-          joinRequestId:
-            joinRequestRef.id,
-
-          newBalance,
-
-          entryFee
-        };
-      });
-
-      return res.json({
         ok: true,
+
         success: true,
+
+        tournamentId:
+          result.tournamentId,
+
         joinRequestId:
           result.joinRequestId,
+
+        status:
+          "joined",
+
+        entryFee:
+          result.entryFee,
+
+        previousBalance:
+          result.previousBalance,
+
         newBalance:
           result.newBalance,
-        entryFee:
-          result.entryFee
+
+        filledSlots:
+          result.filledSlots,
+
+        slots:
+          result.slots,
+
+        message:
+          "Tournament joined successfully"
+
       });
 
     } catch (error) {
 
       const code =
-        error?.message || "";
+        String(
+          error?.message || ""
+        ).trim();
 
-      const map = {
-        USER_NOT_FOUND:
-          [404, "User not found"],
+      // ------------------------------------------------------
+      // ERROR MAP
+      // ------------------------------------------------------
 
-        TOURNAMENT_NOT_FOUND:
-          [404, "Tournament not found"],
+      const errorMap = {
 
-        ALREADY_JOINED:
-          [409, "You already joined this tournament"],
+        USER_NOT_FOUND: [
+          404,
+          "User not found"
+        ],
 
-        TOURNAMENT_FULL:
-          [409, "Tournament is full"],
+        TOURNAMENT_NOT_FOUND: [
+          404,
+          "Tournament not found"
+        ],
 
-        TOURNAMENT_LIVE:
-          [409, "Live tournament cannot be joined"],
+        ALREADY_JOINED: [
+          409,
+          "You already joined this tournament"
+        ],
 
-        TOURNAMENT_CLOSED:
-          [409, "Tournament is closed"],
+        REGISTRATION_NOT_OPEN: [
+          409,
+          "Tournament registration is not open"
+        ],
 
-        INVALID_ENTRY_FEE:
-          [400, "Invalid tournament entry fee"],
+        TOURNAMENT_FULL: [
+          409,
+          "Tournament is full"
+        ],
 
-        INSUFFICIENT_BALANCE:
-          [400, "Insufficient wallet balance"]
+        TOURNAMENT_LIVE: [
+          409,
+          "Live tournament cannot be joined"
+        ],
+
+        TOURNAMENT_CLOSED: [
+          409,
+          "Tournament is closed"
+        ],
+
+        INVALID_ENTRY_FEE: [
+          400,
+          "Invalid tournament entry fee"
+        ],
+
+        INVALID_TOURNAMENT_SLOTS: [
+          500,
+          "Invalid tournament slot configuration"
+        ],
+
+        INVALID_WALLET_BALANCE: [
+          500,
+          "Invalid wallet balance"
+        ],
+
+        INSUFFICIENT_BALANCE: [
+          400,
+          "Insufficient wallet balance"
+        ]
+
       };
 
-      if (map[code]) {
-        return res
-          .status(map[code][0])
-          .json({
-            ok: false,
-            success: false,
-            message:
-              map[code][1]
-          });
+      if (
+        errorMap[code]
+      ) {
+
+        return res.status(
+          errorMap[code][0]
+        ).json({
+
+          ok: false,
+
+          success: false,
+
+          error:
+            code,
+
+          message:
+            errorMap[code][1]
+
+        });
+
       }
 
       console.error(
@@ -654,15 +1113,22 @@ if (entryFee > 0) {
         error
       );
 
-      return res
-        .status(500)
-        .json({
-          ok: false,
-          success: false,
-          message:
-            "Tournament join failed"
-        });
+      return res.status(500).json({
+
+        ok: false,
+
+        success: false,
+
+        error:
+          "TOURNAMENT_JOIN_FAILED",
+
+        message:
+          "Tournament join failed"
+
+      });
+
     }
+
   }
 );
 
@@ -2247,6 +2713,148 @@ async function creditReferralReward(
         }
       );
 
+// ============================================================
+// BATTLE X7 ARENA — CENTRAL WALLET BALANCE HELPER
+// ============================================================
+
+async function x7GetWalletBalance(userId) {
+
+  if (!firebaseReady || !firestore) {
+    throw new Error(
+      "FIREBASE_NOT_READY"
+    );
+  }
+
+  const uid =
+    String(userId || "").trim();
+
+  if (!uid) {
+    throw new Error(
+      "WALLET_USER_REQUIRED"
+    );
+  }
+
+  const userRef =
+    firestore
+      .collection("users")
+      .doc(uid);
+
+  const snap =
+    await userRef.get();
+
+  if (!snap.exists) {
+    throw new Error(
+      "USER_NOT_FOUND"
+    );
+  }
+
+  const data =
+    snap.data() || {};
+
+  const balance =
+    Number(
+      data.walletBalance ?? 0
+    );
+
+  if (
+    !Number.isFinite(balance) ||
+    balance < 0
+  ) {
+    throw new Error(
+      "INVALID_WALLET_BALANCE"
+    );
+  }
+
+  return Number(
+    balance.toFixed(2)
+  );
+}
+
+// ============================================================
+// CENTRAL WALLET BALANCE API
+// USER AUTH REQUIRED
+// ============================================================
+
+app.get(
+  "/wallet/balance",
+  async (req, res) => {
+
+    try {
+
+      const decoded =
+        await requireFirebaseUser(
+          req,
+          res
+        );
+
+      if (!decoded) return;
+
+      const userId =
+        String(
+          decoded.uid || ""
+        ).trim();
+
+      const balance =
+        await x7GetWalletBalance(
+          userId
+        );
+
+      return res.json({
+
+        ok: true,
+
+        userId,
+
+        walletBalance:
+          balance
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "WALLET BALANCE ERROR:",
+        error
+      );
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "USER_NOT_FOUND"
+        });
+      }
+
+      if (
+        error.message ===
+        "INVALID_WALLET_BALANCE"
+      ) {
+
+        return res.status(500).json({
+          ok: false,
+          error:
+            "INVALID_WALLET_BALANCE"
+        });
+      }
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "WALLET_BALANCE_FAILED"
+
+      });
+
+    }
+
+  }
+);
+
       // --------------------------------------------------------
       // UNIVERSAL WALLET LEDGER
       // --------------------------------------------------------
@@ -2448,6 +3056,8 @@ async function initWalletDatabase() {
 
 // ------------------------------------------------------------
 // DEPOSIT REQUEST
+// BATTLE X7 ARENA — CENTRAL PAYMENT ENGINE
+// MANUAL UPI NOW / GATEWAY READY
 // ------------------------------------------------------------
 
 app.post(
@@ -2459,10 +3069,13 @@ app.post(
       if (!pool) {
         return res.status(503).json({
           ok: false,
-          error:
-            "Database not configured"
+          error: "Database not configured"
         });
       }
+
+      // --------------------------------------------------------
+      // FIREBASE USER AUTH
+      // --------------------------------------------------------
 
       const decoded =
         await requireFirebaseUser(
@@ -2473,17 +3086,103 @@ app.post(
       if (!decoded) return;
 
       const userId =
-        decoded.uid;
+        String(decoded.uid || "").trim();
+
+      if (!userId) {
+        return res.status(401).json({
+          ok: false,
+          error: "UNAUTHORIZED"
+        });
+      }
+
+      // --------------------------------------------------------
+      // READ CENTRAL PAYMENT SETTINGS
+      // --------------------------------------------------------
+
+      let paymentSettings = {};
+
+      if (firebaseReady) {
+
+        try {
+
+          const settingsSnap =
+            await firestore
+              .collection("settings")
+              .doc("app")
+              .get();
+
+          if (settingsSnap.exists) {
+            paymentSettings =
+              settingsSnap.data() || {};
+          }
+
+        } catch (settingsError) {
+
+          console.error(
+            "PAYMENT SETTINGS READ ERROR:",
+            settingsError
+          );
+
+          return res.status(503).json({
+            ok: false,
+            error: "PAYMENT_SETTINGS_UNAVAILABLE"
+          });
+        }
+      }
+
+      // --------------------------------------------------------
+      // PAYMENT MODE
+      // --------------------------------------------------------
+
+      const paymentMode =
+        String(
+          paymentSettings.paymentMode ||
+          "manual"
+        )
+          .trim()
+          .toLowerCase();
+
+      const manualEnabled =
+        paymentSettings.manualEnabled !== false;
+
+      const gatewayEnabled =
+        paymentSettings.gatewayEnabled === true;
+
+      // --------------------------------------------------------
+      // CURRENTLY ONLY MANUAL DEPOSIT REQUEST
+      // Gateway will use the same payment pipeline later.
+      // --------------------------------------------------------
+
+      if (
+        paymentMode === "manual" &&
+        !manualEnabled
+      ) {
+
+        return res.status(403).json({
+          ok: false,
+          error: "MANUAL_PAYMENT_DISABLED"
+        });
+      }
+
+      if (
+        paymentMode === "gateway" &&
+        !gatewayEnabled
+      ) {
+
+        return res.status(403).json({
+          ok: false,
+          error: "GATEWAY_PAYMENT_DISABLED"
+        });
+      }
+
+      // --------------------------------------------------------
+      // AMOUNT
+      // --------------------------------------------------------
 
       const amount =
         Number(
-          req.body.amount
+          req.body?.amount
         );
-
-      const utr =
-        String(
-          req.body.utr || ""
-        ).trim();
 
       if (
         !Number.isFinite(amount) ||
@@ -2497,53 +3196,156 @@ app.post(
         });
       }
 
-      if (!utr) {
-
-        return res.status(400).json({
-          ok: false,
-          error:
-            "UTR / Transaction ID is required"
-        });
-      }
-
-      if (amount < 20) {
-
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Minimum deposit amount is ₹20"
-        });
-      }
-
-      if (amount > 10000) {
-
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Maximum deposit amount is ₹10000"
-        });
-      }
-
-      // Prevent same UTR from being submitted twice
-      const duplicate =
-        await pool.query(
-          `
-          SELECT id
-          FROM deposit_requests
-          WHERE utr = $1
-          LIMIT 1
-          `,
-          [utr]
+      const normalizedAmount =
+        Number(
+          amount.toFixed(2)
         );
 
-      if (duplicate.rowCount) {
+      // --------------------------------------------------------
+      // CENTRAL LIMITS
+      // --------------------------------------------------------
 
-        return res.status(409).json({
+      const minDeposit =
+        Number(
+          paymentSettings.minDeposit ??
+          50
+        );
+
+      const maxDeposit =
+        Number(
+          paymentSettings.maxDeposit ??
+          10000
+        );
+
+      if (
+        Number.isFinite(minDeposit) &&
+        normalizedAmount < minDeposit
+      ) {
+
+        return res.status(400).json({
           ok: false,
           error:
-            "This UTR has already been submitted"
+            `Minimum deposit is ₹${minDeposit}`
         });
       }
+
+      if (
+        Number.isFinite(maxDeposit) &&
+        normalizedAmount > maxDeposit
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            `Maximum deposit is ₹${maxDeposit}`
+        });
+      }
+
+      // --------------------------------------------------------
+      // MANUAL UPI REQUIREMENT
+      // --------------------------------------------------------
+
+      const utr =
+        String(
+          req.body?.utr || ""
+        )
+          .trim()
+          .slice(0, 100);
+
+      if (paymentMode === "manual") {
+
+        const upiId =
+          String(
+            paymentSettings.upiId || ""
+          )
+            .trim();
+
+        if (!upiId) {
+
+          return res.status(503).json({
+            ok: false,
+            error:
+              "MANUAL_PAYMENT_NOT_CONFIGURED"
+          });
+        }
+
+        if (!utr || utr.length < 4) {
+
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Valid UTR is required"
+          });
+        }
+      }
+
+      // --------------------------------------------------------
+      // DUPLICATE UTR PROTECTION
+      // --------------------------------------------------------
+
+      if (utr) {
+
+        const duplicate =
+          await pool.query(
+            `
+            SELECT
+              id,
+              user_id,
+              status
+            FROM deposit_requests
+            WHERE LOWER(TRIM(utr))
+              = LOWER(TRIM($1))
+            LIMIT 1
+            `,
+            [utr]
+          );
+
+        if (duplicate.rowCount > 0) {
+
+          return res.status(409).json({
+            ok: false,
+            error:
+              "DUPLICATE_UTR",
+            message:
+              "This UTR has already been submitted."
+          });
+        }
+      }
+
+      // --------------------------------------------------------
+      // PREVENT TOO MANY PENDING REQUESTS
+      // --------------------------------------------------------
+
+      const pending =
+        await pool.query(
+          `
+          SELECT COUNT(*)::int AS count
+          FROM deposit_requests
+          WHERE user_id = $1
+            AND status = 'pending'
+          `,
+          [userId]
+        );
+
+      const pendingCount =
+        Number(
+          pending.rows?.[0]?.count || 0
+        );
+
+      if (pendingCount >= 5) {
+
+        return res.status(429).json({
+          ok: false,
+          error:
+            "TOO_MANY_PENDING_DEPOSITS",
+          message:
+            "Please wait for your existing deposit requests to be reviewed."
+        });
+      }
+
+      // --------------------------------------------------------
+      // CREATE DEPOSIT REQUEST
+      // --------------------------------------------------------
 
       const result =
         await pool.query(
@@ -2564,38 +3366,135 @@ app.post(
             'pending',
             NOW()
           )
-          RETURNING id
+          RETURNING
+            id,
+            user_id,
+            amount,
+            utr,
+            status,
+            created_at
           `,
           [
             userId,
-            amount,
-            utr
+            normalizedAmount,
+            utr || `GATEWAY_PENDING_${Date.now()}`
           ]
         );
 
-      return res.json({
+      const deposit =
+        result.rows[0];
+
+      const requestId =
+        String(
+          deposit.id
+        );
+
+      // --------------------------------------------------------
+      // FIRESTORE MIRROR
+      // --------------------------------------------------------
+
+      if (firebaseReady) {
+
+        try {
+
+          await firestore
+            .collection("depositRequests")
+            .doc(requestId)
+            .set(
+              {
+                id:
+                  requestId,
+
+                userId,
+
+                amount:
+                  normalizedAmount,
+
+                utr:
+                  utr || "",
+
+                paymentMode,
+
+                status:
+                  "pending",
+
+                createdAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp(),
+
+                updatedAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp()
+              },
+              {
+                merge: true
+              }
+            );
+
+        } catch (firestoreError) {
+
+          console.error(
+            "DEPOSIT FIRESTORE MIRROR ERROR:",
+            firestoreError
+          );
+
+          // PostgreSQL request already exists.
+          // Do not create a second payment request.
+        }
+      }
+
+      // --------------------------------------------------------
+      // RESPONSE
+      // --------------------------------------------------------
+
+      return res.status(201).json({
+
         ok: true,
-        requestId:
-          result.rows[0].id,
+
+        success: true,
+
+        requestId,
+
+        paymentMode,
+
         status:
           "pending",
+
+        amount:
+          normalizedAmount,
+
+        minDeposit:
+          Number.isFinite(minDeposit)
+            ? minDeposit
+            : null,
+
+        maxDeposit:
+          Number.isFinite(maxDeposit)
+            ? maxDeposit
+            : null,
+
         message:
-          "Deposit request submitted successfully"
+          paymentMode === "manual"
+            ? "Deposit request submitted successfully."
+            : "Gateway payment request created."
       });
 
     } catch (error) {
 
       console.error(
-        "DEPOSIT REQUEST ERROR:",
+        "WALLET DEPOSIT ERROR:",
         error
       );
 
       return res.status(500).json({
         ok: false,
         error:
-          "Failed to submit deposit request"
+          "DEPOSIT_REQUEST_FAILED"
       });
     }
+
   }
 );
 
@@ -2882,10 +3781,12 @@ app.post(
           [requestId]
         );
 
+  // --------------------------------------------------------
   // Another request/process may have changed  
   // the PostgreSQL status after wallet credit.  
   // Do not credit again because ledger is idempotent.  
-
+  // --------------------------------------------------------
+      
   if (  
     updateResult.rowCount === 0  
   ) {  
@@ -3489,107 +4390,248 @@ app.post(
 
 // ------------------------------------------------------------
 // WITHDRAWAL REQUEST
+// BATTLE X7 ARENA — CENTRAL WITHDRAWAL ENGINE
 // ------------------------------------------------------------
 
 app.post(
   "/wallet/withdraw",
   async (req, res) => {
 
-    if (!pool) {
-
-      return res.status(503).json({
-        ok: false,
-        error:
-          "Database not configured"
-      });
-    }
-
-    const decoded =
-      await requireFirebaseUser(
-        req,
-        res
-      );
-
-    if (!decoded) return;
-
-    const userId =
-      decoded.uid;
-
-    const amount =
-      Number(
-        req.body.amount
-      );
-
-    const upiId =
-      String(
-        req.body.upiId || ""
-      ).trim();
-
-    if (
-      !Number.isFinite(amount) ||
-      amount <= 0
-    ) {
-
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Valid withdrawal amount is required"
-      });
-    }
-
-    if (!upiId) {
-
-      return res.status(400).json({
-        ok: false,
-        error:
-          "UPI ID is required"
-      });
-    }
-
-    if (amount < 50) {
-
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Minimum withdrawal amount is ₹50"
-      });
-    }
-
-    if (amount > 10000) {
-
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Maximum withdrawal amount is ₹10000"
-      });
-    }
-
-    if (!firebaseReady) {
-
-      return res.status(503).json({
-        ok: false,
-        error:
-          "Firebase wallet system is not configured"
-      });
-    }
-
     try {
 
-      const userRef =
-        firestore
-          .collection("users")
-          .doc(userId);
+      if (!pool) {
+        return res.status(503).json({
+          ok: false,
+          error:
+            "Database not configured"
+        });
+      }
+
+      // ------------------------------------------------------
+      // FIREBASE USER AUTH
+      // ------------------------------------------------------
+
+      const decoded =
+        await requireFirebaseUser(
+          req,
+          res
+        );
+
+      if (!decoded) return;
+
+      const userId =
+        String(
+          decoded.uid || ""
+        ).trim();
+
+      if (!userId) {
+        return res.status(401).json({
+          ok: false,
+          error:
+            "UNAUTHORIZED"
+        });
+      }
+
+      // ------------------------------------------------------
+      // FIREBASE WALLET REQUIRED
+      // ------------------------------------------------------
+
+      if (!firebaseReady) {
+        return res.status(503).json({
+          ok: false,
+          error:
+            "Firebase wallet system is not configured"
+        });
+      }
+
+      // ------------------------------------------------------
+      // REQUEST DATA
+      // ------------------------------------------------------
+
+      const amount =
+        Number(
+          req.body?.amount
+        );
+
+      const upiId =
+        String(
+          req.body?.upiId || ""
+        )
+          .trim()
+          .slice(0, 200);
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Valid withdrawal amount is required"
+        });
+      }
+
+      const normalizedAmount =
+        Number(
+          amount.toFixed(2)
+        );
+
+      if (!upiId) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "UPI ID is required"
+        });
+      }
+
+      // ------------------------------------------------------
+      // BASIC UPI FORMAT VALIDATION
+      // ------------------------------------------------------
+
+      const upiPattern =
+        /^[A-Za-z0-9._-]{2,}@[A-Za-z0-9.-]{2,}$/;
+
+      if (!upiPattern.test(upiId)) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Valid UPI ID is required"
+        });
+      }
+
+      // ------------------------------------------------------
+      // READ CENTRAL PAYMENT SETTINGS
+      // ------------------------------------------------------
+
+      let paymentSettings = {};
+
+      try {
+
+        const settingsSnap =
+          await firestore
+            .collection("settings")
+            .doc("app")
+            .get();
+
+        if (settingsSnap.exists) {
+
+          paymentSettings =
+            settingsSnap.data() || {};
+
+        }
+
+      } catch (settingsError) {
+
+        console.error(
+          "WITHDRAW PAYMENT SETTINGS ERROR:",
+          settingsError
+        );
+
+        return res.status(503).json({
+          ok: false,
+          error:
+            "PAYMENT_SETTINGS_UNAVAILABLE"
+        });
+      }
+
+      // ------------------------------------------------------
+      // WITHDRAWAL LIMITS
+      // ------------------------------------------------------
+
+      const minWithdrawal =
+        Number(
+          paymentSettings.minWithdrawal ??
+          100
+        );
+
+      const maxWithdrawal =
+        Number(
+          paymentSettings.maxWithdrawal ??
+          50000
+        );
+
+      if (
+        Number.isFinite(minWithdrawal) &&
+        normalizedAmount < minWithdrawal
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            `Minimum withdrawal is ₹${minWithdrawal}`
+        });
+      }
+
+      if (
+        Number.isFinite(maxWithdrawal) &&
+        normalizedAmount > maxWithdrawal
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            `Maximum withdrawal is ₹${maxWithdrawal}`
+        });
+      }
+
+      // ------------------------------------------------------
+      // TOO MANY PENDING REQUESTS PROTECTION
+      // ------------------------------------------------------
+
+      const pendingSnapshot =
+        await firestore
+          .collection("withdrawRequests")
+          .where(
+            "userId",
+            "==",
+            userId
+          )
+          .where(
+            "status",
+            "==",
+            "pending"
+          )
+          .get();
+
+      if (
+        pendingSnapshot.size >= 3
+      ) {
+
+        return res.status(429).json({
+          ok: false,
+          error:
+            "TOO_MANY_PENDING_WITHDRAWALS",
+          message:
+            "Please wait for your existing withdrawal requests to be processed."
+        });
+      }
+
+      // ------------------------------------------------------
+      // FIRESTORE ATOMIC TRANSACTION
+      // ------------------------------------------------------
 
       const result =
         await firestore.runTransaction(
           async (tx) => {
 
-            const snap =
+            const userRef =
+              firestore
+                .collection("users")
+                .doc(userId);
+
+            // ------------------------------------------------
+            // LOAD USER
+            // ------------------------------------------------
+
+            const userSnap =
               await tx.get(
                 userRef
               );
 
-            if (!snap.exists) {
+            if (!userSnap.exists) {
 
               throw new Error(
                 "USER_NOT_FOUND"
@@ -3597,15 +4639,30 @@ app.post(
             }
 
             const user =
-              snap.data() || {};
+              userSnap.data() || {};
 
             const balance =
               Number(
-                user.walletBalance || 0
+                user.walletBalance ?? 0
               );
 
             if (
-              balance < amount
+              !Number.isFinite(balance) ||
+              balance < 0
+            ) {
+
+              throw new Error(
+                "INVALID_USER_WALLET"
+              );
+            }
+
+            // ------------------------------------------------
+            // CHECK BALANCE
+            // ------------------------------------------------
+
+            if (
+              balance <
+              normalizedAmount
             ) {
 
               throw new Error(
@@ -3613,18 +4670,37 @@ app.post(
               );
             }
 
+            const newBalance =
+              Number(
+                (
+                  balance -
+                  normalizedAmount
+                ).toFixed(2)
+              );
+
+            // ------------------------------------------------
+            // CREATE WITHDRAWAL REQUEST
+            // ------------------------------------------------
+
             const requestRef =
               firestore
                 .collection(
-  "withdrawRequests"
-)
-.doc();
+                  "withdrawRequests"
+                )
+                .doc();
+
+            const requestId =
+              requestRef.id;
+
+            // ------------------------------------------------
+            // DEBIT WALLET
+            // ------------------------------------------------
 
             tx.update(
               userRef,
               {
                 walletBalance:
-                  balance - amount,
+                  newBalance,
 
                 updatedAt:
                   admin.firestore
@@ -3633,24 +4709,270 @@ app.post(
               }
             );
 
+            // ------------------------------------------------
+            // CREATE WITHDRAWAL REQUEST
+            // ------------------------------------------------
+
             tx.set(
               requestRef,
               {
+                id:
+                  requestId,
+
                 userId,
 
-                amount,
+                amount:
+                  normalizedAmount,
 
                 upiId,
 
                 status:
                   "pending",
 
+                paymentMode:
+                  String(
+                    paymentSettings.paymentMode ||
+                    "manual"
+                  )
+                    .trim()
+                    .toLowerCase(),
+
                 createdAt:
+                  admin.firestore
+                    .FieldValue
+                    .serverTimestamp(),
+
+                updatedAt:
                   admin.firestore
                     .FieldValue
                     .serverTimestamp()
               }
             );
+
+            // ------------------------------------------------
+            // UNIVERSAL WALLET LEDGER
+            // IMPORTANT:
+            // MONEY IS RESERVED/DEBITED NOW.
+            // ADMIN APPROVAL DOES NOT DEBIT AGAIN.
+            // ------------------------------------------------
+
+            addWalletLedgerEntry(
+              tx,
+              {
+                userId,
+
+                transactionId:
+                  requestId,
+
+                type:
+                  "withdrawal",
+
+                direction:
+                  "debit",
+
+                amount:
+                  normalizedAmount,
+
+                previousBalance:
+                  balance,
+
+                newBalance,
+
+                status:
+                  "pending",
+
+                referenceId:
+                  requestId,
+
+                description:
+                  "Withdrawal request submitted",
+
+                metadata: {
+                  upiId,
+
+                  source:
+                    "user_withdrawal_request",
+
+                  paymentMode:
+                    String(
+                      paymentSettings.paymentMode ||
+                      "manual"
+                    )
+                      .trim()
+                      .toLowerCase()
+                }
+              }
+            );
+
+            // ------------------------------------------------
+            // RETURN TRANSACTION RESULT
+            // ------------------------------------------------
+
+            return {
+
+              requestId,
+
+              userId,
+
+              amount:
+                normalizedAmount,
+
+              upiId,
+
+              previousBalance:
+                balance,
+
+              newBalance
+
+            };
+
+          }
+        );
+
+      // ------------------------------------------------------
+      // USER NOTIFICATION
+      // ------------------------------------------------------
+
+      try {
+
+        await firestore
+          .collection("users")
+          .doc(userId)
+          .collection("notifications")
+          .add({
+
+            title:
+              "Withdrawal Request Submitted",
+
+            message:
+              `Your withdrawal request of ₹${result.amount.toFixed(2)} has been submitted for review.`,
+
+            type:
+              "withdrawal",
+
+            requestId:
+              result.requestId,
+
+            amount:
+              result.amount,
+
+            status:
+              "pending",
+
+            read:
+              false,
+
+            createdAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp()
+
+          });
+
+      } catch (
+        notificationError
+      ) {
+
+        console.error(
+          "WITHDRAWAL NOTIFICATION ERROR:",
+          notificationError
+        );
+
+      }
+
+      // ------------------------------------------------------
+      // SUCCESS
+      // ------------------------------------------------------
+
+      return res.status(201).json({
+
+        ok: true,
+
+        success: true,
+
+        requestId:
+          result.requestId,
+
+        status:
+          "pending",
+
+        amount:
+          result.amount,
+
+        upiId:
+          result.upiId,
+
+        previousBalance:
+          result.previousBalance,
+
+        newBalance:
+          result.newBalance,
+
+        message:
+          "Withdrawal request submitted successfully"
+
+      });
+
+    } catch (error) {
+
+      // ------------------------------------------------------
+      // KNOWN ERRORS
+      // ------------------------------------------------------
+
+      if (
+        error.message ===
+        "USER_NOT_FOUND"
+      ) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "User not found"
+        });
+      }
+
+      if (
+        error.message ===
+        "INSUFFICIENT_BALANCE"
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Insufficient wallet balance"
+        });
+      }
+
+      if (
+        error.message ===
+        "INVALID_USER_WALLET"
+      ) {
+
+        return res.status(500).json({
+          ok: false,
+          error:
+            "Invalid user wallet balance"
+        });
+      }
+
+      console.error(
+        "WALLET WITHDRAWAL ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "Failed to submit withdrawal request"
+
+      });
+
+    }
+
+  }
+);
 
 // ============================================================
 // ADMIN WITHDRAWAL APPROVE / REJECT
@@ -3717,7 +5039,7 @@ app.post(
           async (tx) => {
 
             // ------------------------------------------------
-            // 1. LOAD WITHDRAWAL REQUEST
+            // LOAD WITHDRAWAL REQUEST
             // ------------------------------------------------
 
             const requestSnap =
@@ -3796,7 +5118,7 @@ app.post(
             }
 
             // ------------------------------------------------
-            // 2. LOAD USER
+            // LOAD USER
             // ------------------------------------------------
 
             const userRef =
@@ -3830,8 +5152,8 @@ app.post(
               );
 
             // ------------------------------------------------
-            // 3. WITHDRAWAL WAS ALREADY DEDUCTED
-            //    WHEN USER CREATED REQUEST
+            // WITHDRAWAL WAS ALREADY DEDUCTED
+            // WHEN USER CREATED REQUEST
             // ------------------------------------------------
 
             if (
@@ -3846,7 +5168,7 @@ app.post(
             }
 
             // ------------------------------------------------
-            // 4. GET EXISTING WITHDRAWAL LEDGER
+            // GET EXISTING WITHDRAWAL LEDGER
             // ------------------------------------------------
 
             const ledgerRef =
@@ -3906,7 +5228,7 @@ app.post(
             } else {
 
               // ------------------------------------------------
-              // 5. CREATE MISSING WITHDRAWAL LEDGER
+              // CREATE MISSING WITHDRAWAL LEDGER
               // ------------------------------------------------
 
               addWalletLedgerEntry(
@@ -3949,7 +5271,7 @@ app.post(
             }
 
             // ------------------------------------------------
-            // 6. UPDATE WITHDRAWAL REQUEST
+            // UPDATE WITHDRAWAL REQUEST
             // ------------------------------------------------
 
             const now =
@@ -3979,7 +5301,7 @@ app.post(
             );
 
             // ------------------------------------------------
-            // 7. USER NOTIFICATION
+            // USER NOTIFICATION
             // ------------------------------------------------
 
             const notificationRef =
@@ -4031,7 +5353,7 @@ app.post(
         );
 
       // ------------------------------------------------------
-      // 8. ADMIN AUDIT LOG
+      // ADMIN AUDIT LOG
       // ------------------------------------------------------
 
       try {
@@ -5837,7 +7159,7 @@ const newBalance =
                 };
 
                 // ------------------------------------------------
-                // 1. SAVE TOURNAMENT RESULT
+                // SAVE TOURNAMENT RESULT
                 // ------------------------------------------------
 
                 tx.set(
@@ -5849,7 +7171,7 @@ const newBalance =
                 );
 
                 // ------------------------------------------------
-                // 2. UPDATE JOIN REQUEST
+                // UPDATE JOIN REQUEST
                 // ------------------------------------------------
 
                 tx.set(
@@ -5884,7 +7206,7 @@ const newBalance =
                 );
 
                 // ------------------------------------------------
-                // 3. CREDIT WALLET
+                // CREDIT WALLET
                 // ------------------------------------------------
 
                 if (prizeWon > 0) {
@@ -5901,7 +7223,7 @@ const newBalance =
                   );
 
                   // ------------------------------------------------
-                  // 4. WALLET LEDGER
+                  // WALLET LEDGER
                   // ------------------------------------------------
 
                   addWalletLedgerEntry(
@@ -5957,7 +7279,7 @@ const newBalance =
                 }
 
                 // ------------------------------------------------
-                // 5. UPDATE LEADERBOARD DATA
+                // UPDATE LEADERBOARD DATA
                 // ------------------------------------------------
 
                 tx.set(
@@ -6018,7 +7340,7 @@ const newBalance =
                 );
 
                 // ------------------------------------------------
-                // 6. PLAYER NOTIFICATION
+                // PLAYER NOTIFICATION
                 // ------------------------------------------------
 
                 const notificationRef =
@@ -8134,6 +9456,7 @@ async function requireAdmin(req, res) {
   // Return verified Firebase user
   return decoded;
 }
+
 // ============================================================
 // CREATE / UPDATE ROOM
 // ADMIN ONLY
@@ -10060,7 +11383,6 @@ app.get(
 
       // --------------------------------------------------------
       // USERS QUERY
-      //
       // IMPORTANT:
       // Do NOT use .get() without limit.
       // That was causing /admin/users to become slow.
@@ -10076,12 +11398,9 @@ app.get(
           .limit(pageLimit + 1);
 
       // --------------------------------------------------------
-      // STATUS FILTER
-      // --------------------------------------------------------
-      //
+      // STATUS FILTERS 
       // Status filtering is applied after reading the small page.
       // This keeps the query simple and avoids unnecessary indexes.
-      //
       // --------------------------------------------------------
 
       // --------------------------------------------------------
@@ -20706,6 +22025,7 @@ app.get(
     }
   }
 );
+
 // ============================================================
 // BATTLE X7 ARENA — ADMIN USER WALLET ADJUST COMPATIBILITY API
 // Admin Panel → /admin/users/:userId/wallet-adjust
@@ -20832,7 +22152,6 @@ app.post(
     }
   }
 );
-
 
 // ============================================================
 // BATTLE X7 ARENA — SECURE MANUAL WALLET ADJUSTMENT
@@ -21370,8 +22689,9 @@ async function x7CreateAdminAuditLog({
 }
 
 // ============================================================
-// BATTLE X7 ARENA — ADMIN SETTINGS
-// App configuration for Admin Panel
+// BATTLE X7 ARENA — CENTRAL APP + PAYMENT SETTINGS
+// Master Admin Only
+// Manual UPI now + Gateway ready for future
 // ============================================================
 
 app.get(
@@ -21409,20 +22729,14 @@ app.get(
           : {};
 
       return res.json({
+
         ok: true,
 
         settings: {
-          minDeposit:
-            Number(data.minDeposit ?? 20),
 
-          maxDeposit:
-            Number(data.maxDeposit ?? 10000),
-
-          minWithdrawal:
-            Number(data.minWithdrawal ?? 50),
-
-          maxWithdrawal:
-            Number(data.maxWithdrawal ?? 10000),
+          // ----------------------------
+          // APP SETTINGS
+          // ----------------------------
 
           maintenance:
             data.maintenance === true,
@@ -21430,8 +22744,118 @@ app.get(
           otpExpiryMinutes:
             Number(
               data.otpExpiryMinutes ?? 5
-            )
+            ),
+
+          // ----------------------------
+          // PAYMENT MODE
+          // ----------------------------
+
+          paymentMode:
+            data.paymentMode === "gateway"
+              ? "gateway"
+              : "manual",
+
+          manualEnabled:
+            data.manualEnabled !== false,
+
+          gatewayEnabled:
+            data.gatewayEnabled === true,
+
+          // ----------------------------
+          // MANUAL UPI SETTINGS
+          // ----------------------------
+
+          upiId:
+            String(
+              data.upiId ?? ""
+            ),
+
+          merchantName:
+            String(
+              data.merchantName ??
+              "BATTLE X7 ARENA"
+            ),
+
+          paymentInstructions:
+            String(
+              data.paymentInstructions ??
+              "Payment karne ke baad apna Transaction ID submit karein."
+            ),
+
+          qrEnabled:
+            data.qrEnabled !== false,
+
+          upiAppsEnabled:
+            data.upiAppsEnabled !== false,
+
+          // ----------------------------
+          // UPI APP VISIBILITY
+          // ----------------------------
+
+          gpayEnabled:
+            data.gpayEnabled !== false,
+
+          phonepeEnabled:
+            data.phonepeEnabled !== false,
+
+          paytmEnabled:
+            data.paytmEnabled !== false,
+
+          bhimEnabled:
+            data.bhimEnabled !== false,
+
+          amazonpayEnabled:
+            data.amazonpayEnabled !== false,
+
+          // ----------------------------
+          // DEPOSIT LIMITS
+          // ----------------------------
+
+          minDeposit:
+            Number(
+              data.minDeposit ?? 20
+            ),
+
+          maxDeposit:
+            Number(
+              data.maxDeposit ?? 10000
+            ),
+
+          // ----------------------------
+          // WITHDRAWAL LIMITS
+          // ----------------------------
+
+          minWithdrawal:
+            Number(
+              data.minWithdrawal ?? 50
+            ),
+
+          maxWithdrawal:
+            Number(
+              data.maxWithdrawal ?? 10000
+            ),
+
+          // ----------------------------
+          // FUTURE GATEWAY SETTINGS
+          // ----------------------------
+
+          gateway: {
+
+            provider:
+              String(
+                data.gateway?.provider ??
+                ""
+              ),
+
+            enabled:
+              data.gateway?.enabled === true,
+
+            webhookEnabled:
+              data.gateway?.webhookEnabled === true
+          }
+
         }
+
       });
 
     } catch (error) {
@@ -21450,6 +22874,9 @@ app.get(
   }
 );
 
+// ============================================================
+// SAVE CENTRAL SETTINGS
+// ============================================================
 
 app.post(
   "/admin/settings",
@@ -21472,23 +22899,115 @@ app.post(
 
     try {
 
+      // ----------------------------
+      // BASIC SETTINGS
+      // ----------------------------
+
       const minDeposit =
-        Number(req.body?.minDeposit);
+        Number(
+          req.body?.minDeposit
+        );
 
       const maxDeposit =
-        Number(req.body?.maxDeposit);
+        Number(
+          req.body?.maxDeposit
+        );
 
       const minWithdrawal =
-        Number(req.body?.minWithdrawal);
+        Number(
+          req.body?.minWithdrawal
+        );
 
       const maxWithdrawal =
-        Number(req.body?.maxWithdrawal);
+        Number(
+          req.body?.maxWithdrawal
+        );
 
       const otpExpiryMinutes =
-        Number(req.body?.otpExpiryMinutes);
+        Number(
+          req.body?.otpExpiryMinutes
+        );
 
       const maintenance =
         req.body?.maintenance === true;
+
+      // ----------------------------
+      // PAYMENT MODE
+      // ----------------------------
+
+      const paymentMode =
+        req.body?.paymentMode === "gateway"
+          ? "gateway"
+          : "manual";
+
+      const manualEnabled =
+        req.body?.manualEnabled !== false;
+
+      const gatewayEnabled =
+        req.body?.gatewayEnabled === true;
+
+      // ----------------------------
+      // MANUAL UPI
+      // ----------------------------
+
+      const upiId =
+        String(
+          req.body?.upiId ?? ""
+        ).trim();
+
+      const merchantName =
+        String(
+          req.body?.merchantName ??
+          "BATTLE X7 ARENA"
+        ).trim();
+
+      const paymentInstructions =
+        String(
+          req.body?.paymentInstructions ??
+          ""
+        ).trim();
+
+      const qrEnabled =
+        req.body?.qrEnabled !== false;
+
+      const upiAppsEnabled =
+        req.body?.upiAppsEnabled !== false;
+
+      // ----------------------------
+      // UPI APPS
+      // ----------------------------
+
+      const gpayEnabled =
+        req.body?.gpayEnabled !== false;
+
+      const phonepeEnabled =
+        req.body?.phonepeEnabled !== false;
+
+      const paytmEnabled =
+        req.body?.paytmEnabled !== false;
+
+      const bhimEnabled =
+        req.body?.bhimEnabled !== false;
+
+      const amazonpayEnabled =
+        req.body?.amazonpayEnabled !== false;
+
+      // ----------------------------
+      // FUTURE GATEWAY
+      // ----------------------------
+
+      const gatewayProvider =
+        String(
+          req.body?.gateway?.provider ??
+          ""
+        ).trim();
+
+      const gatewayWebhookEnabled =
+        req.body?.gateway?.webhookEnabled === true;
+
+      // ======================================================
+      // VALIDATION
+      // ======================================================
 
       if (
         !Number.isFinite(minDeposit) ||
@@ -21497,12 +23016,14 @@ app.post(
         !Number.isFinite(maxWithdrawal) ||
         !Number.isFinite(otpExpiryMinutes)
       ) {
+
         return res.status(400).json({
           ok: false,
           error:
             "Invalid settings values"
         });
       }
+
 
       if (
         minDeposit < 0 ||
@@ -21511,6 +23032,7 @@ app.post(
         maxWithdrawal < minWithdrawal ||
         otpExpiryMinutes < 1
       ) {
+
         return res.status(400).json({
           ok: false,
           error:
@@ -21518,17 +23040,124 @@ app.post(
         });
       }
 
+
+      // Manual mode ke liye UPI ID required
+      if (
+        paymentMode === "manual" &&
+        manualEnabled &&
+        !upiId
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Manual payment ke liye UPI ID required hai"
+        });
+      }
+
+
+      // Gateway mode ke liye provider required
+      if (
+        paymentMode === "gateway" &&
+        gatewayEnabled &&
+        !gatewayProvider
+      ) {
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Gateway mode ke liye gateway provider required hai"
+        });
+      }
+
+      // ======================================================
+      // SAVE
+      // ======================================================
+
       await firestore
         .collection("settings")
         .doc("app")
         .set(
+
           {
-            minDeposit,
-            maxDeposit,
-            minWithdrawal,
-            maxWithdrawal,
+
+            // ----------------------------
+            // BASIC
+            // ----------------------------
+
             maintenance,
+
             otpExpiryMinutes,
+
+            // ----------------------------
+            // PAYMENT MODE
+            // ----------------------------
+
+            paymentMode,
+
+            manualEnabled,
+
+            gatewayEnabled,
+
+            // ----------------------------
+            // MANUAL UPI
+            // ----------------------------
+
+            upiId,
+
+            merchantName,
+
+            paymentInstructions,
+
+            qrEnabled,
+
+            upiAppsEnabled,
+
+            // ----------------------------
+            // UPI APPS
+            // ----------------------------
+
+            gpayEnabled,
+
+            phonepeEnabled,
+
+            paytmEnabled,
+
+            bhimEnabled,
+
+            amazonpayEnabled,
+
+            // ----------------------------
+            // LIMITS
+            // ----------------------------
+
+            minDeposit,
+
+            maxDeposit,
+
+            minWithdrawal,
+
+            maxWithdrawal,
+
+            // ----------------------------
+            // FUTURE GATEWAY
+            // ----------------------------
+
+            gateway: {
+
+              provider:
+                gatewayProvider,
+
+              enabled:
+                gatewayEnabled,
+
+              webhookEnabled:
+                gatewayWebhookEnabled
+            },
+
+            // ----------------------------
+            // AUDIT
+            // ----------------------------
 
             updatedAt:
               admin.firestore
@@ -21537,17 +23166,67 @@ app.post(
 
             updatedBy:
               adminUser.uid
+
           },
+
           {
             merge: true
           }
+
         );
 
+      // ======================================================
+      // ADMIN AUDIT LOG
+      // ======================================================
+
+      if (
+        typeof x7CreateAdminAuditLog ===
+        "function"
+      ) {
+
+        await x7CreateAdminAuditLog({
+
+          adminUid:
+            adminUser.uid,
+
+          action:
+            "PAYMENT_SETTINGS_UPDATED",
+
+          section:
+            "payment_settings",
+
+          targetId:
+            "settings/app",
+
+          details: {
+
+            paymentMode,
+
+            manualEnabled,
+
+            gatewayEnabled,
+
+            upiId:
+              upiId
+                ? "configured"
+                : "not_configured",
+
+            gatewayProvider
+
+          }
+
+        });
+
+      }
+
+
       return res.json({
+
         ok: true,
 
         message:
-          "Settings saved successfully"
+          "Payment settings saved successfully"
+
       });
 
     } catch (error) {
@@ -21558,9 +23237,12 @@ app.post(
       );
 
       return res.status(500).json({
+
         ok: false,
+
         error:
           "Settings save nahi ho saki"
+
       });
     }
   }
