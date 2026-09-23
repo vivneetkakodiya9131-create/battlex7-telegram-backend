@@ -16274,6 +16274,7 @@ if (firebaseReady && decoded?.uid) {
         `Aapki problem aur proof support team ko Telegram par bhej diya gaya hai.\n\n` +
         `Support team ab aapki complaint review karegi.`
     });
+}
 
 } catch (ticketError) {
 
