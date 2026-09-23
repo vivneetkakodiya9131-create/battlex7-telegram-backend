@@ -15500,7 +15500,8 @@ return res.json({
     `Kya main ye support ticket create karke support team ko bhej du?\n\n` +
     `👉 Haan / Yes`
 });
-    
+    }
+  
   // ========================================================
   // USER SENDS SCREENSHOT / VIDEO
   // ========================================================
