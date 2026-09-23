@@ -3498,7 +3498,7 @@ app.post(
   }
 );
 
- // ============================================================
+// ============================================================
 // ADMIN DEPOSIT APPROVE / REJECT
 // ============================================================
 
@@ -9454,13 +9454,357 @@ async function requireAdmin(req, res) {
   }
 
   // Return verified Firebase user
-  return decoded;
+req.user = decoded;
+
+return decoded;
 }
 
 // ============================================================
 // CREATE / UPDATE ROOM
 // ADMIN ONLY
 // ============================================================
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN USER BLOCK / UNBLOCK
+// ============================================================
+
+app.patch(
+  "/admin/user/:userId/block",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady || !firestore) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const adminUid =
+        String(
+          req.user?.uid ||
+          ""
+        ).trim();
+
+      const userId =
+        String(
+          req.params.userId ||
+          ""
+        ).trim();
+
+      if (!userId) {
+        return res.status(400).json({
+          ok: false,
+          error: "User ID is required"
+        });
+      }
+
+      const action =
+        String(
+          req.body?.action ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
+
+      if (
+        action !== "block" &&
+        action !== "unblock"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Action must be block or unblock"
+        });
+      }
+
+      // --------------------------------------------------------
+      // ADMIN CANNOT BLOCK HIMSELF
+      // --------------------------------------------------------
+
+      if (userId === adminUid) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Admin cannot block or unblock their own account"
+        });
+      }
+
+      // --------------------------------------------------------
+      // LOAD USER
+      // --------------------------------------------------------
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(userId);
+
+      const userSnap =
+        await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "User not found"
+        });
+      }
+
+      const userData =
+        userSnap.data() || {};
+
+      // --------------------------------------------------------
+      // MASTER ADMIN PROTECTION
+      // --------------------------------------------------------
+
+      const masterAdminUid =
+        String(
+          process.env.ADMIN_UID ||
+          ""
+        ).trim();
+
+      if (
+        masterAdminUid &&
+        userId === masterAdminUid
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Master Admin account cannot be blocked"
+        });
+      }
+
+      // --------------------------------------------------------
+      // ADMIN ROLE PROTECTION
+      // --------------------------------------------------------
+
+      const targetRole =
+        String(
+          userData.role ||
+          "user"
+        )
+          .trim()
+          .toLowerCase();
+
+      if (
+        targetRole === "admin" ||
+        targetRole === "master_admin" ||
+        targetRole === "masteradmin"
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Admin accounts cannot be blocked through this endpoint"
+        });
+      }
+
+      // --------------------------------------------------------
+      // NEW STATUS
+      // --------------------------------------------------------
+
+      const newBlocked =
+        action === "block";
+
+      const newStatus =
+        newBlocked
+          ? "blocked"
+          : "active";
+
+      const previousBlocked =
+        userData.isBlocked === true;
+
+      const previousStatus =
+        String(
+          userData.status ||
+          (
+            previousBlocked
+              ? "blocked"
+              : "active"
+          )
+        )
+          .trim()
+          .toLowerCase();
+
+      // --------------------------------------------------------
+      // ALREADY IN SAME STATE
+      // --------------------------------------------------------
+
+      if (
+        previousBlocked === newBlocked
+      ) {
+        return res.json({
+          ok: true,
+          userId,
+          action,
+          alreadyApplied: true,
+          isBlocked: newBlocked,
+          status: newStatus,
+          message:
+            newBlocked
+              ? "User is already blocked"
+              : "User is already active"
+        });
+      }
+
+      // --------------------------------------------------------
+      // UPDATE USER
+      // --------------------------------------------------------
+
+      await userRef.set(
+        {
+          isBlocked:
+            newBlocked,
+
+          status:
+            newStatus,
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedBy:
+            adminUid
+        },
+        {
+          merge: true
+        }
+      );
+
+      // --------------------------------------------------------
+      // NOTIFICATION
+      // --------------------------------------------------------
+
+      try {
+
+        await userRef
+          .collection("notifications")
+          .add({
+
+            title:
+              newBlocked
+                ? "Account Blocked"
+                : "Account Unblocked",
+
+            message:
+              newBlocked
+                ? "Your BATTLE X7 ARENA account has been blocked by the administration."
+                : "Your BATTLE X7 ARENA account has been unblocked.",
+
+            type:
+              "account",
+
+            read:
+              false,
+
+            createdAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp()
+
+          });
+
+      } catch (notificationError) {
+
+        console.error(
+          "USER BLOCK NOTIFICATION ERROR:",
+          notificationError?.message ||
+          notificationError
+        );
+
+      }
+
+      // --------------------------------------------------------
+      // ADMIN AUDIT LOG
+      // --------------------------------------------------------
+
+      await x7CreateAdminAuditLog({
+
+        adminUid:
+
+          adminUid,
+
+        action:
+
+          newBlocked
+            ? "user_blocked"
+            : "user_unblocked",
+
+        section:
+
+          "users",
+
+        targetId:
+
+          userId,
+
+        details: {
+
+          userId,
+
+          previousStatus,
+
+          newStatus,
+
+          previousBlocked,
+
+          newBlocked,
+
+          targetRole,
+
+          changedBy:
+            adminUid
+
+        }
+
+      });
+
+      // --------------------------------------------------------
+      // SUCCESS
+      // --------------------------------------------------------
+
+      return res.json({
+
+        ok: true,
+
+        userId,
+
+        action,
+
+        isBlocked:
+          newBlocked,
+
+        status:
+          newStatus,
+
+        message:
+          newBlocked
+            ? "User blocked successfully"
+            : "User unblocked successfully"
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USER BLOCK / UNBLOCK ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+
+        ok: false,
+
+        error:
+          "User block/unblock failed"
+
+      });
+
+    }
+
+  }
+);
 
 app.post("/room/create", async (req, res) => {
 
@@ -18751,102 +19095,835 @@ app.get("/admin/finance/summary", requireAdmin, async (req, res) => {
   }
 });
         
-// ------------------------------------------------------------
-// ADMIN — USER UPDATE
-// Safe fields only
-// ------------------------------------------------------------
+// ============================================================
+// BATTLE X7 ARENA — ADMIN USER UPDATE
+// SAFE PROFILE + STATUS UPDATE
+// ROLE / WALLET / EARNINGS PROTECTED
+// AUDIT LOG ENABLED
+// ============================================================
 
 app.patch(
   ["/admin/user/:userId", "/admin/users/:userId"],
-  requireAdmin, async (req, res) => {
+  requireAdmin,
+  async (req, res) => {
 
-  try {
+    try {
 
-    if (!firebaseReady) {
-      return res.status(503).json({
-        ok: false,
-        error: "Firebase is not configured"
-      });
-    }
+      if (!firebaseReady || !firestore) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
 
-    const userId = String(
-      req.params.userId || ""
-    ).trim();
+      const adminUser = req.user || {};
 
-    if (!userId) {
-      return res.status(400).json({
-        ok: false,
-        error: "User ID is required"
-      });
-    }
+      const userId = String(
+        req.params.userId || ""
+      ).trim();
 
-    const body = req.body || {};
+      if (!userId) {
+        return res.status(400).json({
+          ok: false,
+          error: "User ID is required"
+        });
+      }
 
-    const allowed = [
-      "username",
-      "name",
-      "freeFireName",
-      "freeFireUid",
-      "phone",
-      "dob",
-      "photoURL",
-      "status",
-      "isBlocked"
-    ];
+      const body = req.body || {};
 
-    const updates = {};
+      // --------------------------------------------------------
+      // LOAD USER
+      // --------------------------------------------------------
 
-    for (const key of allowed) {
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(userId);
+
+      const userSnap =
+        await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "User not found"
+        });
+      }
+
+      const oldUser =
+        userSnap.data() || {};
+
+      // --------------------------------------------------------
+      // IMPORTANT SECURITY RULE
+      //
+      // This endpoint can NEVER modify:
+      // role
+      // walletBalance
+      // earnings
+      // totalEarnings
+      // wins
+      // totalWins
+      // kills
+      // totalKills
+      // referral rewards
+      // Firebase UID
+      //
+      // Wallet changes must use the dedicated wallet endpoint.
+      // --------------------------------------------------------
+
+      const allowed = [
+        "username",
+        "name",
+        "freeFireName",
+        "freeFireUid",
+        "phone",
+        "dob",
+        "photoURL",
+        "status",
+        "isBlocked"
+      ];
+
+      const updates = {};
+
+      for (const key of allowed) {
+
+        if (
+          Object.prototype.hasOwnProperty.call(
+            body,
+            key
+          )
+        ) {
+          updates[key] = body[key];
+        }
+
+      }
+
+      if (!Object.keys(updates).length) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "No editable user fields supplied"
+        });
+      }
+
+      // --------------------------------------------------------
+      // USERNAME VALIDATION
+      // --------------------------------------------------------
 
       if (
         Object.prototype.hasOwnProperty.call(
-          body,
-          key
+          updates,
+          "username"
         )
       ) {
-        updates[key] = body[key];
+
+        updates.username =
+          String(
+            updates.username || ""
+          ).trim();
+
+        if (
+          !updates.username ||
+          updates.username.length > 50
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Username must be 1-50 characters"
+          });
+        }
+
       }
-    }
 
-    if (!Object.keys(updates).length) {
-      return res.status(400).json({
-        ok: false,
-        error: "No editable user fields supplied"
-      });
-    }
+      // --------------------------------------------------------
+      // NAME VALIDATION
+      // --------------------------------------------------------
 
-    updates.updatedAt =
-      admin.firestore.FieldValue.serverTimestamp();
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "name"
+        )
+      ) {
 
-    await firestore
-      .collection("users")
-      .doc(userId)
-      .set(
+        updates.name =
+          String(
+            updates.name || ""
+          ).trim();
+
+        if (
+          updates.name.length > 100
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Name is too long"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // FREE FIRE NAME
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "freeFireName"
+        )
+      ) {
+
+        updates.freeFireName =
+          String(
+            updates.freeFireName || ""
+          ).trim();
+
+        if (
+          updates.freeFireName.length > 100
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Free Fire name is too long"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // FREE FIRE UID
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "freeFireUid"
+        )
+      ) {
+
+        updates.freeFireUid =
+          String(
+            updates.freeFireUid || ""
+          ).trim();
+
+        if (
+          updates.freeFireUid.length > 50
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Free Fire UID is too long"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // PHONE
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "phone"
+        )
+      ) {
+
+        updates.phone =
+          String(
+            updates.phone || ""
+          ).trim();
+
+        if (
+          updates.phone.length > 30
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Phone number is too long"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // DOB
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "dob"
+        )
+      ) {
+
+        updates.dob =
+          String(
+            updates.dob || ""
+          ).trim();
+
+        if (
+          updates.dob.length > 30
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Invalid DOB"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // PHOTO URL
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "photoURL"
+        )
+      ) {
+
+        updates.photoURL =
+          String(
+            updates.photoURL || ""
+          ).trim();
+
+        if (
+          updates.photoURL.length > 1000
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Photo URL is too long"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // STATUS
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "status"
+        )
+      ) {
+
+        updates.status =
+          String(
+            updates.status || ""
+          )
+            .trim()
+            .toLowerCase();
+
+        const allowedStatuses = [
+          "active",
+          "blocked",
+          "inactive",
+          "suspended"
+        ];
+
+        if (
+          !allowedStatuses.includes(
+            updates.status
+          )
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Invalid user status"
+          });
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // BLOCK FLAG
+      // --------------------------------------------------------
+
+      if (
+        Object.prototype.hasOwnProperty.call(
+          updates,
+          "isBlocked"
+        )
+      ) {
+
+        if (
+          typeof updates.isBlocked !==
+          "boolean"
+        ) {
+
+          return res.status(400).json({
+            ok: false,
+            error:
+              "isBlocked must be true or false"
+          });
+
+        }
+
+      }
+
+      // --------------------------------------------------------
+      // KEEP STATUS + BLOCK FLAG CONSISTENT
+      // --------------------------------------------------------
+
+      if (
+        updates.isBlocked === true
+      ) {
+
+        updates.status =
+          "blocked";
+
+      } else if (
+        updates.isBlocked === false &&
+        !Object.prototype.hasOwnProperty.call(
+          updates,
+          "status"
+        )
+      ) {
+
+        updates.status =
+          "active";
+
+      }
+
+      if (
+        updates.status === "blocked"
+      ) {
+
+        updates.isBlocked =
+          true;
+
+      }
+
+      // --------------------------------------------------------
+      // UPDATE TIMESTAMP
+      // --------------------------------------------------------
+
+      updates.updatedAt =
+        admin.firestore
+          .FieldValue
+          .serverTimestamp();
+
+      updates.updatedBy =
+        String(
+          adminUser.uid || ""
+        );
+
+      // --------------------------------------------------------
+      // SAVE
+      // --------------------------------------------------------
+
+      await userRef.set(
         updates,
         {
           merge: true
         }
       );
 
-    return res.json({
-      ok: true,
-      userId,
-      message: "User updated successfully"
-    });
+      // --------------------------------------------------------
+      // AUDIT LOG
+      // --------------------------------------------------------
 
-  } catch (error) {
+      await x7CreateAdminAuditLog({
+        adminUid:
+          adminUser.uid,
 
-    console.error(
-      "ADMIN USER UPDATE ERROR:",
-      error
-    );
+        action:
+          "user_updated",
 
-    return res.status(500).json({
-      ok: false,
-      error: "User update nahi ho saka"
-    });
+        section:
+          "users",
+
+        targetId:
+          userId,
+
+        details: {
+          userId,
+
+          changedFields:
+            Object.keys(updates)
+              .filter(
+                key =>
+                  ![
+                    "updatedAt",
+                    "updatedBy"
+                  ].includes(key)
+              ),
+
+          previousStatus:
+            String(
+              oldUser.status ||
+              (
+                oldUser.isBlocked === true
+                  ? "blocked"
+                  : "active"
+              )
+            ),
+
+          newStatus:
+            String(
+              updates.status ||
+              oldUser.status ||
+              (
+                oldUser.isBlocked === true
+                  ? "blocked"
+                  : "active"
+              )
+            ),
+
+          previousBlocked:
+            oldUser.isBlocked === true,
+
+          newBlocked:
+            Object.prototype.hasOwnProperty.call(
+              updates,
+              "isBlocked"
+            )
+              ? updates.isBlocked === true
+              : oldUser.isBlocked === true
+        }
+      });
+
+      // --------------------------------------------------------
+      // SUCCESS
+      // --------------------------------------------------------
+
+      return res.json({
+        ok: true,
+
+        userId,
+
+        message:
+          "User updated successfully",
+
+        changedFields:
+          Object.keys(updates)
+            .filter(
+              key =>
+                ![
+                  "updatedAt",
+                  "updatedBy"
+                ].includes(key)
+            )
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USER UPDATE ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "User update nahi ho saka",
+        details:
+          error?.message ||
+          "Unknown error"
+      });
+
+    }
+
   }
-});
+);
+
+// ============================================================
+// BATTLE X7 ARENA — ADMIN USER BLOCK / UNBLOCK
+// SAFE DEACTIVATE / REACTIVATE
+// ============================================================
+
+app.patch(
+  "/admin/user/:userId/block",
+  requireAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (!firebaseReady || !firestore) {
+        return res.status(503).json({
+          ok: false,
+          error: "Firebase is not configured"
+        });
+      }
+
+      const adminUid =
+        String(
+          req.user?.uid || ""
+        ).trim();
+
+      const userId =
+        String(
+          req.params.userId || ""
+        ).trim();
+
+      const action =
+        String(
+          req.body?.action || ""
+        )
+          .trim()
+          .toLowerCase();
+
+      if (!adminUid) {
+        return res.status(401).json({
+          ok: false,
+          error: "Admin identity unavailable"
+        });
+      }
+
+      if (!userId) {
+        return res.status(400).json({
+          ok: false,
+          error: "User ID is required"
+        });
+      }
+
+      if (
+        !["block", "unblock"].includes(action)
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Action must be block or unblock"
+        });
+      }
+
+      // --------------------------------------------------------
+      // SELF PROTECTION
+      // --------------------------------------------------------
+
+      if (userId === adminUid) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Admin apne account ko block nahi kar sakta"
+        });
+      }
+
+      const userRef =
+        firestore
+          .collection("users")
+          .doc(userId);
+
+      const userSnap =
+        await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          ok: false,
+          error: "User not found"
+        });
+      }
+
+      const user =
+        userSnap.data() || {};
+
+      // --------------------------------------------------------
+      // MASTER ADMIN PROTECTION
+      // --------------------------------------------------------
+
+      const masterAdminUid =
+        String(
+          process.env.ADMIN_UID || ""
+        ).trim();
+
+      if (
+        masterAdminUid &&
+        userId === masterAdminUid
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Master Admin ko block nahi kiya ja sakta"
+        });
+      }
+
+      // --------------------------------------------------------
+      // ADMIN ROLE PROTECTION
+      // --------------------------------------------------------
+
+      const role =
+        String(
+          user.role || "user"
+        )
+          .trim()
+          .toLowerCase();
+
+      if (
+        role === "admin" ||
+        role === "master_admin" ||
+        role === "masteradmin"
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Admin account ko is endpoint se block nahi kiya ja sakta"
+        });
+      }
+
+      // --------------------------------------------------------
+      // BLOCK / UNBLOCK
+      // --------------------------------------------------------
+
+      const isBlocked =
+        action === "block";
+
+      const newStatus =
+        isBlocked
+          ? "blocked"
+          : "active";
+
+      await userRef.set(
+        {
+          isBlocked,
+          status: newStatus,
+
+          updatedAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          updatedBy:
+            adminUid,
+
+          accountAction:
+            isBlocked
+              ? "deactivated"
+              : "reactivated",
+
+          accountActionAt:
+            admin.firestore
+              .FieldValue
+              .serverTimestamp(),
+
+          accountActionBy:
+            adminUid
+        },
+        {
+          merge: true
+        }
+      );
+
+      // --------------------------------------------------------
+      // USER NOTIFICATION
+      // --------------------------------------------------------
+
+      const notificationRef =
+        userRef
+          .collection("notifications")
+          .doc();
+
+      await notificationRef.set({
+
+        type: "account",
+
+        title:
+          isBlocked
+            ? "Account Deactivated"
+            : "Account Reactivated",
+
+        message:
+          isBlocked
+            ? "Aapka BATTLE X7 ARENA account temporarily deactivated hai."
+            : "Aapka BATTLE X7 ARENA account reactivate kar diya gaya hai.",
+
+        read: false,
+
+        createdAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        updatedAt:
+          admin.firestore
+            .FieldValue
+            .serverTimestamp(),
+
+        sentBy:
+          adminUid,
+
+        source: "admin"
+      });
+
+      // --------------------------------------------------------
+      // ADMIN AUDIT LOG
+      // --------------------------------------------------------
+
+      await x7CreateAdminAuditLog({
+
+        adminUid,
+
+        action:
+          isBlocked
+            ? "USER_BLOCKED"
+            : "USER_UNBLOCKED",
+
+        section:
+          "users",
+
+        targetId:
+          userId,
+
+        details: {
+          previousStatus:
+            user.status || "",
+
+          previousIsBlocked:
+            Boolean(
+              user.isBlocked
+            ),
+
+          newStatus,
+
+          newIsBlocked:
+            isBlocked
+        }
+
+      });
+
+      return res.json({
+
+        ok: true,
+
+        userId,
+
+        action,
+
+        status:
+          newStatus,
+
+        isBlocked,
+
+        message:
+          isBlocked
+            ? "User successfully deactivated"
+            : "User successfully reactivated"
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ADMIN USER BLOCK/UNBLOCK ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          "User account status change nahi ho saka"
+      });
+
+    }
+
+  }
+);
 
 // ============================================================
 // BATTLE X7 ARENA — ADMIN USER COMPLETE DETAIL
@@ -22249,6 +23326,7 @@ app.post(
 
 
       // Maximum manual adjustment safety limit.
+      
       if (amount > 100000) {
 
         return res.status(400).json({
