@@ -11553,6 +11553,7 @@ app.get(
             resultDoc.data() || {};
 
           // Only actually settled results
+          
           if (
             result.settled !== true
           ) {
@@ -11666,8 +11667,15 @@ app.get(
 
 app.get(
   "/admin/users",
-  requireAdmin,
   async (req, res) => {
+
+    const adminUser =
+      await requireAdmin(
+        req,
+        res
+      );
+
+    if (!adminUser) return;
 
     const startedAt = Date.now();
 
